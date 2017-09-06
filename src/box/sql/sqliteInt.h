@@ -617,10 +617,9 @@ extern int sqlite3OSTrace;
 #endif
 
 /*
- * Swap two objects of type TYPE.
- */
-#undef SWAP			/* temporary crutch against redefite warning */
-#define SWAP(TYPE,A,B) {TYPE t=A; A=B; B=t;}
+** Swap two objects of type TYPE.
+*/
+#define SWAP_WITH_TYPE(TYPE,A,B) {TYPE t=A; A=B; B=t;}
 
 /*
  * Check to see if this machine uses EBCDIC.  (Yes, believe it or
