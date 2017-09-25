@@ -54,6 +54,43 @@ UnsupportedIndexFeature::UnsupportedIndexFeature(const char *file,
 }
 
 int
+replace_check_dup(struct tuple *old_tuple, struct tuple *dup_tuple,
+		  enum dup_replace_mode mode, uint32_t space_id,
+		  const char *index_name)
+{
+	if (dup_tuple == NULL) {
+		if (mode == DUP_REPLACE) {
+			struct space *space = space_cache_find(space_id);
+			/*
+			 * dup_replace_mode is DUP_REPLACE, and
+			 * a tuple with the same key is not found.
+			 */
+			diag_set(ClientError, old_tuple ?
+				 ER_CANT_UPDATE_PRIMARY_KEY :
+				 ER_TUPLE_NOT_FOUND, index_name,
+				 space_name(space));
+			return -1;
+		}
+	} else { /* dup_tuple != NULL */
+		if (dup_tuple != old_tuple &&
+		    (old_tuple != NULL || mode == DUP_INSERT)) {
+			struct space *space = space_cache_find(space_id);
+			/*
+			 * There is a duplicate of new_tuple,
+			 * and it's not old_tuple: we can't
+			 * possibly delete more than one tuple
+			 * at once.
+			 */
+			diag_set(ClientError, ER_TUPLE_FOUND, index_name,
+				 space_name(space));
+			diag_log();
+			return -1;
+		}
+	}
+	return 0;
+}
+
+int
 key_validate(struct index_def *index_def, enum iterator_type type, const char *key,
 	     uint32_t part_count)
 {

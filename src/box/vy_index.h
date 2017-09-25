@@ -270,6 +270,8 @@ struct vy_index {
 	 * the index.
 	 */
 	vy_index_read_set_t read_set;
+	/** User visible name. */
+	char name[0];
 };
 
 /** Return index name. Used for logging. */

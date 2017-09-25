@@ -34,7 +34,8 @@
 #include "errinj.h"
 #include "memory.h"
 #include "fiber.h"
-#include <third_party/qsort_arg.h>
+#include "scoped_guard.h"
+#include "third_party/qsort_arg.h"
 
 /* {{{ Utilities. *************************************************/
 
@@ -323,8 +324,6 @@ struct tuple *
 MemtxTree::replace(struct tuple *old_tuple, struct tuple *new_tuple,
 		   enum dup_replace_mode mode)
 {
-	uint32_t errcode;
-
 	if (new_tuple) {
 		struct tuple *dup_tuple = NULL;
 
@@ -336,16 +335,15 @@ MemtxTree::replace(struct tuple *old_tuple, struct tuple *new_tuple,
 				  "MemtxTree", "replace");
 		}
 
-		errcode = replace_check_dup(old_tuple, dup_tuple, mode);
-
-		if (errcode) {
+		auto dup_guard = make_scoped_guard([=] {
 			memtx_tree_delete(&tree, new_tuple);
 			if (dup_tuple)
 				memtx_tree_insert(&tree, dup_tuple, 0);
-			struct space *sp = space_cache_find(index_def->space_id);
-			tnt_raise(ClientError, errcode, index_name(this),
-				  space_name(sp));
-		}
+		});
+		replace_check_dup_xc(old_tuple, dup_tuple, mode,
+				     index_def->space_id, index_def->name);
+		dup_guard.is_active = false;
+
 		if (dup_tuple)
 			return dup_tuple;
 	}

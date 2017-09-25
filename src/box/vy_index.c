@@ -104,13 +104,17 @@ vy_index_new(struct vy_index_env *index_env, struct vy_cache_env *cache_env,
 
 	assert(index_def->key_def->part_count > 0);
 	assert(index_def->iid == 0 || pk != NULL);
+	int name_len = strlen(index_def->name);
 
-	struct vy_index *index = calloc(1, sizeof(struct vy_index));
+	struct vy_index *index = calloc(1, sizeof(struct vy_index) +
+					name_len + 1);
 	if (index == NULL) {
 		diag_set(OutOfMemory, sizeof(struct vy_index),
 			 "calloc", "struct vy_index");
 		goto fail;
 	}
+	memcpy(index->name, index_def->name, name_len);
+	index->name[name_len] = 0;
 	index->env = index_env;
 
 	index->tree = malloc(sizeof(*index->tree));

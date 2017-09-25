@@ -59,6 +59,7 @@
 #include "info.h"
 #include "column_mask.h"
 #include "trigger.h"
+#include "index.h"
 
 #define HEAP_FORWARD_DECLARATION
 #include "salad/heap.h"
@@ -2722,7 +2723,6 @@ vy_index_get(struct vy_env *env, struct vy_tx *tx, struct vy_index *index,
  * a duplicate key error in the diagnostics area.
  * @param env        Vinyl environment.
  * @param tx         Current transaction.
- * @param space      Target space.
  * @param index      Index in which to search.
  * @param key        MessagePack'ed data, the array without a
  *                   header.
@@ -2732,8 +2732,8 @@ vy_index_get(struct vy_env *env, struct vy_tx *tx, struct vy_index *index,
  * @retval -1 Memory error or the key is found.
  */
 static inline int
-vy_check_dup_key(struct vy_env *env, struct vy_tx *tx, struct space *space,
-		 struct vy_index *index, const char *key, uint32_t part_count)
+vy_check_dup_key(struct vy_env *env, struct vy_tx *tx, struct vy_index *index,
+		 const char *key, uint32_t part_count)
 {
 	struct tuple *found;
 	(void) part_count;
@@ -2746,11 +2746,9 @@ vy_check_dup_key(struct vy_env *env, struct vy_tx *tx, struct space *space,
 	if (vy_index_get(env, tx, index, key, index->key_def->part_count,
 			 &found))
 		return -1;
-
-	if (found) {
+	if (replace_check_dup(NULL, found, DUP_INSERT, index->space_id,
+			      index->name) != 0) {
 		tuple_unref(found);
-		diag_set(ClientError, ER_TUPLE_FOUND,
-			 index_name_by_id(space, index->id), space_name(space));
 		return -1;
 	}
 	return 0;
@@ -2760,7 +2758,6 @@ vy_check_dup_key(struct vy_env *env, struct vy_tx *tx, struct space *space,
  * Insert a tuple in a primary index.
  * @param env   Vinyl environment.
  * @param tx    Current transaction.
- * @param space Target space.
  * @param pk    Primary vinyl index.
  * @param stmt  Tuple to insert.
  *
@@ -2768,8 +2765,8 @@ vy_check_dup_key(struct vy_env *env, struct vy_tx *tx, struct space *space,
  * @retval -1 Memory error or duplicate key error.
  */
 static inline int
-vy_insert_primary(struct vy_env *env, struct vy_tx *tx, struct space *space,
-		  struct vy_index *pk, struct tuple *stmt)
+vy_insert_primary(struct vy_env *env, struct vy_tx *tx, struct vy_index *pk,
+		  struct tuple *stmt)
 {
 	assert(vy_stmt_type(stmt) == IPROTO_REPLACE);
 	assert(tx != NULL && tx->state == VINYL_TX_READY);
@@ -2783,7 +2780,7 @@ vy_insert_primary(struct vy_env *env, struct vy_tx *tx, struct space *space,
 	 * conflict with existing tuples.
 	 */
 	uint32_t part_count = mp_decode_array(&key);
-	if (vy_check_dup_key(env, tx, space, pk, key, part_count))
+	if (vy_check_dup_key(env, tx, pk, key, part_count))
 		return -1;
 	return vy_tx_set(tx, pk, stmt);
 }
@@ -2792,7 +2789,6 @@ vy_insert_primary(struct vy_env *env, struct vy_tx *tx, struct space *space,
  * Insert a tuple in a secondary index.
  * @param env       Vinyl environment.
  * @param tx        Current transaction.
- * @param space     Target space.
  * @param index     Secondary index.
  * @param stmt      Tuple to replace.
  *
@@ -2800,7 +2796,7 @@ vy_insert_primary(struct vy_env *env, struct vy_tx *tx, struct space *space,
  * @retval -1 Memory error or duplicate key error.
  */
 static int
-vy_insert_secondary(struct vy_env *env, struct vy_tx *tx, struct space *space,
+vy_insert_secondary(struct vy_env *env, struct vy_tx *tx,
 		    struct vy_index *index, struct tuple *stmt)
 {
 	assert(vy_stmt_type(stmt) == IPROTO_REPLACE);
@@ -2818,7 +2814,7 @@ vy_insert_secondary(struct vy_env *env, struct vy_tx *tx, struct space *space,
 		if (key == NULL)
 			return -1;
 		uint32_t part_count = mp_decode_array(&key);
-		if (vy_check_dup_key(env, tx, space, index, key, part_count))
+		if (vy_check_dup_key(env, tx, index, key, part_count))
 			return -1;
 	}
 	return vy_tx_set(tx, index, stmt);
@@ -2955,7 +2951,7 @@ vy_replace_impl(struct vy_env *env, struct vy_tx *tx, struct space *space,
 			if (vy_tx_set(tx, index, delete) != 0)
 				goto error;
 		}
-		if (vy_insert_secondary(env, tx, space, index, new_stmt) != 0)
+		if (vy_insert_secondary(env, tx, index, new_stmt) != 0)
 			goto error;
 	}
 	if (delete != NULL)
@@ -3202,8 +3198,8 @@ vy_check_update(struct space *space, const struct vy_index *pk,
 {
 	if (!key_update_can_be_skipped(pk->key_def->column_mask, column_mask) &&
 	    vy_tuple_compare(old_tuple, new_tuple, pk->key_def) != 0) {
-		diag_set(ClientError, ER_CANT_UPDATE_PRIMARY_KEY,
-			 index_name_by_id(space, pk->id), space_name(space));
+		diag_set(ClientError, ER_CANT_UPDATE_PRIMARY_KEY, pk->name,
+			 space_name(space));
 		return -1;
 	}
 	return 0;
@@ -3323,7 +3319,7 @@ vy_update(struct vy_env *env, struct vy_tx *tx, struct txn_stmt *stmt,
 			continue;
 		if (vy_tx_set(tx, index, delete) != 0)
 			goto error;
-		if (vy_insert_secondary(env, tx, space, index, stmt->new_tuple))
+		if (vy_insert_secondary(env, tx, index, stmt->new_tuple))
 			goto error;
 	}
 	tuple_unref(delete);
@@ -3358,7 +3354,7 @@ vy_insert_first_upsert(struct vy_env *env, struct vy_tx *tx,
 	struct vy_index *index;
 	for (uint32_t i = 1; i < space->index_count; ++i) {
 		index = vy_index(space->index[i]);
-		if (vy_insert_secondary(env, tx, space, index, stmt) != 0)
+		if (vy_insert_secondary(env, tx, index, stmt) != 0)
 			return -1;
 	}
 	return 0;
@@ -3598,8 +3594,7 @@ vy_upsert(struct vy_env *env, struct vy_tx *tx, struct txn_stmt *stmt,
 			continue;
 		if (vy_tx_set(tx, index, delete) != 0)
 			goto error;
-		if (vy_insert_secondary(env, tx, space, index,
-					stmt->new_tuple) != 0)
+		if (vy_insert_secondary(env, tx, index, stmt->new_tuple) != 0)
 			goto error;
 	}
 	tuple_unref(delete);
@@ -3641,13 +3636,12 @@ vy_insert(struct vy_env *env, struct vy_tx *tx, struct txn_stmt *stmt,
 				    request->tuple_end);
 	if (stmt->new_tuple == NULL)
 		return -1;
-	if (vy_insert_primary(env, tx, space, pk, stmt->new_tuple) != 0)
+	if (vy_insert_primary(env, tx, pk, stmt->new_tuple) != 0)
 		return -1;
 
 	for (uint32_t iid = 1; iid < space->index_count; ++iid) {
 		struct vy_index *index = vy_index(space->index[iid]);
-		if (vy_insert_secondary(env, tx, space, index,
-					stmt->new_tuple) != 0)
+		if (vy_insert_secondary(env, tx, index, stmt->new_tuple) != 0)
 			return -1;
 	}
 	return 0;

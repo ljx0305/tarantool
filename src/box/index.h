@@ -210,6 +210,47 @@ int
 box_index_info(uint32_t space_id, uint32_t index_id,
 	       struct info_handler *info);
 
+/**
+ * The manner in which replace in a unique index must treat
+ * duplicates (tuples with the same value of indexed key),
+ * possibly present in the index.
+ */
+enum dup_replace_mode {
+	/**
+	 * If a duplicate is found, delete it and insert
+	 * a new tuple instead. Otherwise, insert a new tuple.
+	 */
+	DUP_REPLACE_OR_INSERT,
+	/**
+	 * If a duplicate is found, produce an error.
+	 * I.e. require that no old key exists with the same
+	 * value.
+	 */
+	DUP_INSERT,
+	/**
+	 * Unless a duplicate exists, throw an error.
+	 */
+	DUP_REPLACE
+};
+
+/**
+ * Check if replacement of an old tuple with a new one is
+ * allowed.
+ * @param old_tuple Tuple found by its key before replace.
+ * @param dup_tuple Tuple to replace by a new tuple.
+ * @param mode Duplicate checking mode.
+ * @param space_id Name of a space to check.
+ * @param index_name Name of an index to check.
+ *
+ * @retval  0 Success.
+ * @retval -1 Either duplicate key error or tuple not found error
+ *         or primary key update error.
+ */
+int
+replace_check_dup(struct tuple *old_tuple, struct tuple *dup_tuple,
+		  enum dup_replace_mode mode, uint32_t space_id,
+		  const char *index_name);
+
 #if defined(__cplusplus)
 } /* extern "C" */
 #include "index_def.h"
@@ -249,29 +290,6 @@ key_validate(struct index_def *index_def, enum iterator_type type, const char *k
 int
 primary_key_validate(struct key_def *key_def, const char *key,
 		     uint32_t part_count);
-
-/**
- * The manner in which replace in a unique index must treat
- * duplicates (tuples with the same value of indexed key),
- * possibly present in the index.
- */
-enum dup_replace_mode {
-	/**
-	 * If a duplicate is found, delete it and insert
-	 * a new tuple instead. Otherwise, insert a new tuple.
-	 */
-	DUP_REPLACE_OR_INSERT,
-	/**
-	 * If a duplicate is found, produce an error.
-	 * I.e. require that no old key exists with the same
-	 * value.
-	 */
-	DUP_INSERT,
-	/**
-	 * Unless a duplicate exists, throw an error.
-	 */
-	DUP_REPLACE
-};
 
 struct Index {
 public:
@@ -360,36 +378,15 @@ struct IteratorGuard
 	~IteratorGuard() { it->free(it); }
 };
 
-/**
- * Check if replacement of an old tuple with a new one is
- * allowed.
- */
-static inline uint32_t
-replace_check_dup(struct tuple *old_tuple, struct tuple *dup_tuple,
-		  enum dup_replace_mode mode)
+/** Throw-able version of replace_check_dup(). */
+static inline void
+replace_check_dup_xc(struct tuple *old_tuple, struct tuple *dup_tuple,
+		     enum dup_replace_mode mode, uint32_t space_id,
+		     const char *index_name)
 {
-	if (dup_tuple == NULL) {
-		if (mode == DUP_REPLACE) {
-			/*
-			 * dup_replace_mode is DUP_REPLACE, and
-			 * a tuple with the same key is not found.
-			 */
-			return old_tuple ?
-			       ER_CANT_UPDATE_PRIMARY_KEY : ER_TUPLE_NOT_FOUND;
-		}
-	} else { /* dup_tuple != NULL */
-		if (dup_tuple != old_tuple &&
-		    (old_tuple != NULL || mode == DUP_INSERT)) {
-			/*
-			 * There is a duplicate of new_tuple,
-			 * and it's not old_tuple: we can't
-			 * possibly delete more than one tuple
-			 * at once.
-			 */
-			return ER_TUPLE_FOUND;
-		}
-	}
-	return 0;
+	if (replace_check_dup(old_tuple, dup_tuple, mode, space_id,
+			      index_name) != 0)
+		diag_raise();
 }
 
 /** Get index ordinal number in space. */
