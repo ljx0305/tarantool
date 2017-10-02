@@ -294,8 +294,8 @@ test:do_catchsql_test(
     "misc1-6.1",
     [[
         CREATE TABLE t4(
-          abort primary key, asc, begin, cluster, conflict, copy, delimiters, desc, end,
-          explain, fail, ignore, key, offset, pragma, replace, temp, view
+          abort primary key, "asc", beginn, cluster, conflict, copy, delimiters, "desc", endd,
+          "explain", fail, ignore, key, offset, pragma, replace, temp, "view"
         );
     ]], {
         -- <misc1-6.1>
