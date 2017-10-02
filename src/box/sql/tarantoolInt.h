@@ -7,6 +7,7 @@
  */
 
 #include <stdint.h>
+#include "box/index.h"
 
 /*
  * Tarantool system spaces.
@@ -16,6 +17,19 @@
 #define TARANTOOL_SYS_INDEX_NAME   "_index"
 #define TARANTOOL_SYS_TRIGGER_NAME "_trigger"
 #define TARANTOOL_SYS_TRUNCATE_NAME "_truncate"
+
+/*
+ * Tarantool iterator API was apparently designed by space aliens.
+ * This wrapper is necessary for interfacing with the SQLite btree code.
+ */
+
+struct ta_cursor {
+    size_t             size;
+    box_iterator_t    *iter;
+    struct tuple      *tuple_last;
+    enum iterator_type type;
+    char               key[1];
+};
 
 /* Max space id seen so far. */
 #define TARANTOOL_SYS_SCHEMA_MAXID_KEY "max_id"

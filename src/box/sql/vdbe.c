@@ -39,6 +39,8 @@
  * in this file for details.  If in doubt, do not deviate from existing
  * commenting and indentation practices when changing or adding code.
  */
+#include <box/tuple.h>
+#include <box/index.h>
 #include "box/txn.h"
 #include "box/session.h"
 #include "sqliteInt.h"
@@ -117,7 +119,6 @@ updateMaxBlobsize(Mem *p)
 	}
 }
 #endif
-
 /*
  * This macro evaluates to true if either the update hook or the preupdate
  * hook are enabled for database connect DB.
@@ -2526,8 +2527,6 @@ case OP_Column: {
 	pC = p->apCsr[pOp->p1];
 	p2 = pOp->p2;
 
-	pCrsr = NULL;
-
 	/* If the cursor cache is stale, bring it up-to-date */
 	rc = sqlite3VdbeCursorMoveto(&pC, &p2);
 	if (rc) goto abort_due_to_error;
@@ -2543,6 +2542,73 @@ case OP_Column: {
 	assert(pC->eCurType!=CURTYPE_PSEUDO || pC->nullRow);
 	assert(pC->eCurType!=CURTYPE_SORTER);
 
+	/*
+	 * In case of tarantool, read directly from the cursor.
+	 * It optimizes data access by reusing offset table
+	 * stored in a tuple.
+	 *
+	 * todo: in the future this path should be the only one
+	 * The only case which is not handled by this path is
+	 * ephemeral tables, once they are supported by
+	 * Tarantool, redundant code must be deleted
+	 */
+	if (!(pC->eCurType==CURTYPE_BTREE &&
+	    pC->uc.pCursor->curFlags & BTCF_TaCursor)){
+		goto not_tarantool_cursor_column;
+
+	}
+	struct ta_cursor *c;
+	struct tuple *tpl;
+	const unsigned char* field;
+	const char* end_of_field;
+	pCrsr = pC->uc.pCursor;
+	c =  pCrsr->pTaCursor;
+	if (pC->nullRow) {
+		sqlite3VdbeMemSetNull(pDest);
+		goto op_column_out;
+	}
+	assert(c!=NULL);
+	tpl = c->tuple_last;
+	/*
+	 * Emit NULL value
+	 */
+	if (tpl == NULL || (unsigned)p2>=tuple_field_count(tpl)){
+		sqlite3VdbeMemSetNull(pDest);
+		goto op_column_out;
+	}
+	if (VdbeMemDynamic(pDest)) {
+		sqlite3VdbeMemSetNull(pDest);
+	}
+	field = (const unsigned char*) tuple_field(tpl, (unsigned) p2);
+	end_of_field = (const char*)field;
+	mp_check(&end_of_field, (const char*)tpl + tpl->data_offset + tpl->bsize);
+	sqlite3VdbeMsgpackGet(field, pDest);
+	if (pDest->flags == 0) {
+		pDest->n = (int)(end_of_field - (const char*)field);
+		pDest->z = (char *)field;
+		pDest->flags = MEM_Blob|MEM_Ephem|MEM_Subtype;
+		pDest->eSubtype = MSGPACK_SUBTYPE;
+	}
+	/*
+	 * Add 0 termination (at most for strings)
+	 * Not sure why do we check MEM_Ephem
+	 */
+	if ((pDest->flags & (MEM_Ephem | MEM_Str)) == (MEM_Ephem | MEM_Str)) {
+		int len = pDest->n;
+		if (pDest->szMalloc<len+1) {
+			if (sqlite3VdbeMemGrow(pDest, len+1, 1))
+				goto op_column_error;
+		} else {
+			pDest->z = memcpy(pDest->zMalloc, pDest->z, len);
+			pDest->flags &= ~MEM_Ephem;
+		}
+		pDest->z[len] = 0;
+		pDest->flags |= MEM_Term;
+		pDest->enc = encoding;
+	}
+	goto op_column_out;
+
+		not_tarantool_cursor_column:
 	if (pC->cacheStatus!=p->cacheCtr) {                /*OPTIMIZATION-IF-FALSE*/
 		if (pC->nullRow) {
 			if (pC->eCurType==CURTYPE_PSEUDO) {
@@ -2657,6 +2723,7 @@ case OP_Column: {
 	/* MsgPack map, array or extension (unsupported in sqlite).
 	 * Wrap it in a blob verbatim.
 	 */
+
 	if (pDest->flags == 0) {
 		pDest->n = aOffset[p2+1]-aOffset[p2];
 		pDest->z = (char *)zData+aOffset[p2];

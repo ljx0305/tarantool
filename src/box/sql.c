@@ -150,18 +150,6 @@ sql_get()
  * are accurately positioned, hence both 0 and 1 are fine.
  */
 
-/*
- * Tarantool iterator API was apparently designed by space aliens.
- * This wrapper is necessary for interfacing with the SQLite btree code.
- */
-struct ta_cursor {
-	size_t             size;
-	box_iterator_t    *iter;
-	struct tuple      *tuple_last;
-	enum iterator_type type;
-	char               key[1];
-};
-
 static struct ta_cursor *
 cursor_create(struct ta_cursor *c, size_t key_size);
 
