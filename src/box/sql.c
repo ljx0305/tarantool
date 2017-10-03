@@ -150,6 +150,18 @@ sql_get()
  * are accurately positioned, hence both 0 and 1 are fine.
  */
 
+/*
+ * Tarantool iterator API was apparently designed by space aliens.
+ * This wrapper is necessary for interfacing with the SQLite btree code.
+ */
+struct ta_cursor {
+	size_t             size;
+	box_iterator_t    *iter;
+	struct tuple      *tuple_last;
+	enum iterator_type type;
+	char               key[1];
+};
+
 static struct ta_cursor *
 cursor_create(struct ta_cursor *c, size_t key_size);
 
@@ -192,6 +204,24 @@ const void *tarantoolSqlite3PayloadFetch(BtCursor *pCur, u32 *pAmt)
 
 	*pAmt = box_tuple_bsize(c->tuple_last);
 	return tuple_data(c->tuple_last);
+}
+
+const void *
+tarantoolSqlite3TupleColumnFast(BtCursor *pCur, u32 fieldno, u32 *field_size)
+{
+	assert((pCur->curFlags & BTCF_TaCursor) != 0);
+	struct ta_cursor *c = pCur->pTaCursor;
+	assert(c != NULL);
+	assert(c->tuple_last != NULL);
+	struct tuple_format *format = tuple_format(c->tuple_last);
+	assert(fieldno < format->field_count);
+	if (format->fields[fieldno].offset_slot == TUPLE_OFFSET_SLOT_NIL)
+		return NULL;
+	const char *field = tuple_field(c->tuple_last, fieldno);
+	const char *end = field;
+	mp_next(&end);
+	*field_size = end - field;
+	return field;
 }
 
 int tarantoolSqlite3First(BtCursor *pCur, int *pRes)

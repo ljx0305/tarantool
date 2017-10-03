@@ -39,8 +39,6 @@
  * in this file for details.  If in doubt, do not deviate from existing
  * commenting and indentation practices when changing or adding code.
  */
-#include <box/tuple.h>
-#include <box/index.h>
 #include "box/txn.h"
 #include "box/session.h"
 #include "sqliteInt.h"
@@ -119,6 +117,7 @@ updateMaxBlobsize(Mem *p)
 	}
 }
 #endif
+
 /*
  * This macro evaluates to true if either the update hook or the preupdate
  * hook are enabled for database connect DB.
@@ -2513,7 +2512,7 @@ case OP_NotNull: {            /* same as TK_NOTNULL, jump, in1 */
 case OP_Column: {
 	int p2;            /* column number to retrieve */
 	VdbeCursor *pC;    /* The VDBE cursor */
-	BtCursor *pCrsr;   /* The BTree cursor */
+	BtCursor *pCrsr = NULL; /* The BTree cursor */
 	u32 *aOffset;      /* aOffset[i] is offset to start of data for i-th column */
 	int i;             /* Loop counter */
 	Mem *pDest;        /* Where to write the extracted value */
@@ -2542,73 +2541,6 @@ case OP_Column: {
 	assert(pC->eCurType!=CURTYPE_PSEUDO || pC->nullRow);
 	assert(pC->eCurType!=CURTYPE_SORTER);
 
-	/*
-	 * In case of tarantool, read directly from the cursor.
-	 * It optimizes data access by reusing offset table
-	 * stored in a tuple.
-	 *
-	 * todo: in the future this path should be the only one
-	 * The only case which is not handled by this path is
-	 * ephemeral tables, once they are supported by
-	 * Tarantool, redundant code must be deleted
-	 */
-	if (!(pC->eCurType==CURTYPE_BTREE &&
-	    pC->uc.pCursor->curFlags & BTCF_TaCursor)){
-		goto not_tarantool_cursor_column;
-
-	}
-	struct ta_cursor *c;
-	struct tuple *tpl;
-	const unsigned char* field;
-	const char* end_of_field;
-	pCrsr = pC->uc.pCursor;
-	c =  pCrsr->pTaCursor;
-	if (pC->nullRow) {
-		sqlite3VdbeMemSetNull(pDest);
-		goto op_column_out;
-	}
-	assert(c!=NULL);
-	tpl = c->tuple_last;
-	/*
-	 * Emit NULL value
-	 */
-	if (tpl == NULL || (unsigned)p2>=tuple_field_count(tpl)){
-		sqlite3VdbeMemSetNull(pDest);
-		goto op_column_out;
-	}
-	if (VdbeMemDynamic(pDest)) {
-		sqlite3VdbeMemSetNull(pDest);
-	}
-	field = (const unsigned char*) tuple_field(tpl, (unsigned) p2);
-	end_of_field = (const char*)field;
-	mp_check(&end_of_field, (const char*)tpl + tpl->data_offset + tpl->bsize);
-	sqlite3VdbeMsgpackGet(field, pDest);
-	if (pDest->flags == 0) {
-		pDest->n = (int)(end_of_field - (const char*)field);
-		pDest->z = (char *)field;
-		pDest->flags = MEM_Blob|MEM_Ephem|MEM_Subtype;
-		pDest->eSubtype = MSGPACK_SUBTYPE;
-	}
-	/*
-	 * Add 0 termination (at most for strings)
-	 * Not sure why do we check MEM_Ephem
-	 */
-	if ((pDest->flags & (MEM_Ephem | MEM_Str)) == (MEM_Ephem | MEM_Str)) {
-		int len = pDest->n;
-		if (pDest->szMalloc<len+1) {
-			if (sqlite3VdbeMemGrow(pDest, len+1, 1))
-				goto op_column_error;
-		} else {
-			pDest->z = memcpy(pDest->zMalloc, pDest->z, len);
-			pDest->flags &= ~MEM_Ephem;
-		}
-		pDest->z[len] = 0;
-		pDest->flags |= MEM_Term;
-		pDest->enc = encoding;
-	}
-	goto op_column_out;
-
-		not_tarantool_cursor_column:
 	if (pC->cacheStatus!=p->cacheCtr) {                /*OPTIMIZATION-IF-FALSE*/
 		if (pC->nullRow) {
 			if (pC->eCurType==CURTYPE_PSEUDO) {
@@ -2640,12 +2572,7 @@ case OP_Column: {
 			}
 		}
 		pC->cacheStatus = p->cacheCtr;
-		/** Decode the # of record fields (MsgPack array header).
-		 * Assume the header is available even if the data is truncated,
-		 * which happens when overflow pages come into play.
-		 */
-		if ( avail==0 || mp_typeof(pC->aRow[0])!=MP_ARRAY ||
-		     mp_check_array((char *)pC->aRow, (char *)(pC->aRow + avail))>0) {
+		if (avail == 0) {
 			rc = SQLITE_CORRUPT_BKPT;
 			goto abort_due_to_error;
 		}
@@ -2680,39 +2607,52 @@ case OP_Column: {
 		zEnd = zData + pC->payloadSize;
 	}
 
-	/* Make sure at least the first p2+1 entries of the header have been
-	 * parsed and valid information is in aOffset[]
+	/*
+	 * Make sure at least the first p2+1 entries of the header
+	 * have been parsed and valid information is in aOffset[].
+	 * If there is more header available for parsing in the
+	 * record, try to extract additional fields up through the
+	 * p2+1-th field.
 	 */
-	if (pC->nHdrParsed<=p2) {
-		/* If there is more header available for parsing in the record, try
-		 * to extract additional fields up through the p2+1-th field
-		 */
-		i = pC->nHdrParsed;
-		zParse = zData+aOffset[i];
+	if (pC->nHdrParsed <= p2) {
+		u32 size;
+		if (pC->eCurType == CURTYPE_BTREE &&
+		    pCrsr != NULL && (pCrsr->curFlags & BTCF_TaCursor) != 0 &&
+		    (zParse = tarantoolSqlite3TupleColumnFast(pCrsr, p2,
+							      &size)) != NULL) {
+			/*
+			 * Special case for tarantool spaces: for
+			 * indexed fields a tuple field map can be
+			 * used. Else there is no sense in
+			 * tuple_field usage, because it makes
+			 * foreach field { mp_next(); } to find
+			 * a field. In such a case sqlite is
+			 * better - it saves offsets to all fields
+			 * visited in mp_next() cycle.
+			 */
+			aOffset[p2] = zParse - zData;
+			aOffset[p2 + 1] = aOffset[p2] + size;
+		} else {
+			i = pC->nHdrParsed;
+			zParse = zData+aOffset[i];
 
-		/* Fill in aOffset[i] values through the p2-th field. */
-		do{
-			if (mp_check((const char **)&zParse, (char *)zEnd) != 0) {
-				rc = SQLITE_CORRUPT_BKPT;
-				goto op_column_error;
-			}
-			aOffset[++i] = (u32)(zParse-zData);
-		}while( i<=p2);
-
-		/* Excess data? */
-		if ((unsigned)p2==pC->nRowField && zParse!=zEnd) {
-			rc = SQLITE_CORRUPT_BKPT;
-			goto op_column_error;
+			/*
+			 * Fill in aOffset[i] values through the
+			 * p2-th field.
+			 */
+			do{
+				mp_next((const char **) &zParse);
+				aOffset[++i] = (u32)(zParse-zData);
+			}while( i<=p2);
+			assert((u32)p2 != pC->nRowField || zParse == zEnd);
+			pC->nHdrParsed = i;
 		}
-
-		pC->nHdrParsed = i;
 	}
 
 	/* Extract the content for the p2+1-th column.  Control can only
 	 * reach this point if aOffset[p2], aOffset[p2+1] are
 	 * all valid.
 	 */
-	assert(p2<pC->nHdrParsed);
 	assert(rc==SQLITE_OK);
 	assert(sqlite3VdbeCheckMemInvariants(pDest));
 	if (VdbeMemDynamic(pDest)) {

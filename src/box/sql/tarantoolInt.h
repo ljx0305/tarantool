@@ -7,7 +7,6 @@
  */
 
 #include <stdint.h>
-#include "box/index.h"
 
 /*
  * Tarantool system spaces.
@@ -17,19 +16,6 @@
 #define TARANTOOL_SYS_INDEX_NAME   "_index"
 #define TARANTOOL_SYS_TRIGGER_NAME "_trigger"
 #define TARANTOOL_SYS_TRUNCATE_NAME "_truncate"
-
-/*
- * Tarantool iterator API was apparently designed by space aliens.
- * This wrapper is necessary for interfacing with the SQLite btree code.
- */
-
-struct ta_cursor {
-    size_t             size;
-    box_iterator_t    *iter;
-    struct tuple      *tuple_last;
-    enum iterator_type type;
-    char               key[1];
-};
 
 /* Max space id seen so far. */
 #define TARANTOOL_SYS_SCHEMA_MAXID_KEY "max_id"
@@ -58,6 +44,19 @@ const char *tarantoolErrorMessage();
 /* Storage interface. */
 int tarantoolSqlite3CloseCursor(BtCursor * pCur);
 const void *tarantoolSqlite3PayloadFetch(BtCursor * pCur, u32 * pAmt);
+
+/**
+ * Try to get a current tuple field using its field map.
+ * @param pCur Btree cursor holding a tuple.
+ * @param fieldno Number of a field to get.
+ * @param[out] field_size Result field size.
+ * @retval not NULL MessagePack field.
+ * @retval     NULL Can not use field_map - it does not contain
+ *         offset to @a fieldno.
+ */
+const void *
+tarantoolSqlite3TupleColumnFast(BtCursor *pCur, u32 fieldno, u32 *field_size);
+
 int tarantoolSqlite3First(BtCursor * pCur, int *pRes);
 int tarantoolSqlite3Last(BtCursor * pCur, int *pRes);
 int tarantoolSqlite3Next(BtCursor * pCur, int *pRes);
