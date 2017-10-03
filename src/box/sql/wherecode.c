@@ -1651,9 +1651,9 @@ sqlite3WhereCodeOneLoopStart(WhereInfo * pWInfo,	/* Complete information about t
 		     && bRev == (pIdx->aSortOrder[nEq] == SQLITE_SO_ASC))
 		    || (bRev && pIdx->nKeyCol == nEq)
 		    ) {
-			SWAP_WITH_TYPE(WhereTerm *, pRangeEnd, pRangeStart);
-			SWAP_WITH_TYPE(u8, bSeekPastNull, bStopAtNull);
-			SWAP_WITH_TYPE(u8, nBtm, nTop);
+			SWAP(pRangeEnd, pRangeStart);
+			SWAP(bSeekPastNull, bStopAtNull);
+			SWAP(nBtm, nTop);
 		}
 
 		/* Generate code to evaluate all constraint terms using == or IN

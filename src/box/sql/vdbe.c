@@ -2517,7 +2517,7 @@ case OP_Column: {
 	int i;             /* Loop counter */
 	Mem *pDest;        /* Where to write the extracted value */
 	Mem sMem;          /* For storing the record being decoded */
-	const u8 *zData;   /* Part of the record being decoded */
+	const u8 *zData = NULL; /* Part of the record being decoded */
 	const u8 *zEnd;    /* Data end */
 	const u8 *zParse;  /* Next unparsed byte of the row */
 	u32 avail;         /* Number of bytes of available data */

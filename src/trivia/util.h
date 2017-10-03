@@ -46,6 +46,10 @@ extern "C" {
 
 #define restrict __restrict__
 
+#ifndef typeof
+#define typeof __typeof__
+#endif
+
 #ifndef NDEBUG
 #define TRASH(ptr) memset(ptr, '#', sizeof(*ptr))
 #else
