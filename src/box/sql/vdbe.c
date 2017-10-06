@@ -1082,6 +1082,19 @@ case OP_Integer: {         /* out2 */
 	break;
 }
 
+/* Opcode: Bool P1 P2 * * *
+ * Synopsis: r[P2]=P1
+ *
+ * The boolean value P1 is written into register P2.
+ */
+case OP_Bool: {         /* out2 */
+	pOut = out2Prerelease(p, pOp);
+	assert(pOp->p4type == P4_BOOL);
+	pOut->flags = MEM_Bool;
+	pOut->u.b = pOp->p4.b;
+	break;
+}
+
 /* Opcode: Int64 * P2 * P4 *
  * Synopsis: r[P2]=P4
  *
@@ -4128,16 +4141,17 @@ case OP_Sequence: {           /* out2 */
 	break;
 }
 
-/* Opcode: MaxId P1 P2 P3 * *
+/* Opcode: NextId P1 P2 P3 * *
  * Synopsis: r[P3]=get_max(space_index[P1]{Column[P2]})
  *
  * Get next Id of the table. P1 is a table cursor, P2 is column
- * number. Return in P3 maximum id found in provided column.
+ * number. Return in P3 maximum id found in provided column,
+ * incremented by one.
  *
  * This opcode is Tarantool specific and will segfault in case
  * of SQLite cursor.
  */
-case OP_MaxId: {     /* out3 */
+case OP_NextId: {     /* out3 */
 	VdbeCursor *pC;    /* The VDBE cursor */
 	int p2;            /* Column number, which stores the id */
 	int pgno;          /* Page number of the cursor */
@@ -4155,6 +4169,7 @@ case OP_MaxId: {     /* out3 */
 			     p2,
 			     (uint64_t *) &pOut->u.i);
 
+	pOut->u.i += 1;
 	pOut->flags = MEM_Int;
 	break;
 }

@@ -295,7 +295,7 @@ sqlite3AutoincrementBegin(Parse * pParse)
 		static const VdbeOpList autoInc[] = {
 			/* 0  */ {OP_Null, 0, 0, 0},
 			/* 1  */ {OP_Rewind, 0, 9, 0},
-			/* 2  */ {OP_Column, 0, 0, 0},
+			/* 2  */ {OP_Column, 0, 2, 0},
 			/* 3  */ {OP_Ne, 0, 6, 0},
 			/* 4  */ {OP_Column, 0, 1, 0},
 			/* 5  */ {OP_Goto, 0, 8, 0},
@@ -312,13 +312,18 @@ sqlite3AutoincrementBegin(Parse * pParse)
 		aOp = sqlite3VdbeAddOpList(v, ArraySize(autoInc), autoInc, iLn);
 		if (aOp == 0)
 			break;
+		/* r(memId) <- NULL; r(memId+1) <- NULL */
 		aOp[0].p2 = memId;
 		aOp[0].p3 = memId + 1;
+		/* r(memId) <- Column(cursor(0), column_no(2)) */
 		aOp[2].p3 = memId;
+		/* If r(memId) != r(memId+1) then goto 6; */
 		aOp[3].p1 = memId - 1;
 		aOp[3].p3 = memId;
 		aOp[3].p5 = SQLITE_JUMPIFNULL;
+		/* r(memId) = Column(cursor(0), column_no(1)) */
 		aOp[4].p3 = memId;
+		/* r(memId) = 0 */
 		aOp[7].p2 = memId;
 	}
 }
@@ -335,7 +340,9 @@ static void
 autoIncStep(Parse * pParse, int memId, int regRowid)
 {
 	if (memId > 0) {
-		sqlite3VdbeAddOp2(pParse->pVdbe, OP_MemMax, memId, regRowid);
+		(void)pParse;
+		(void)regRowid;
+		// sqlite3VdbeAddOp2(pParse->pVdbe, OP_MemMax, memId, regRowid);
 	}
 }
 
@@ -1003,11 +1010,7 @@ sqlite3Insert(Parse * pParse,	/* Parser context */
 				VdbeCoverage(v);
 			}
 		} else if (withoutRowid) {
-			if (pTab->iAutoIncPKey >= 0)
-				sqlite3VdbeAddOp3(v, OP_MaxId, iDataCur,
-						  pTab->iAutoIncPKey, regRowid);
-			else
-				sqlite3VdbeAddOp2(v, OP_Null, 0, regRowid);
+			sqlite3VdbeAddOp2(v, OP_Null, 0, regRowid);
 		} else {
 			sqlite3VdbeAddOp3(v, OP_NewRowid, iDataCur, regRowid,
 					  regAutoinc);
@@ -1034,8 +1037,6 @@ sqlite3Insert(Parse * pParse,	/* Parser context */
 							  OP_FCopy,
 							  regAutoinc,
 							  iRegStore);
-					sqlite3VdbeAddOp2(v, OP_AddImm,
-							  iRegStore, 1);
 				}
 				regPK = iRegStore;
 			}
@@ -1200,7 +1201,7 @@ sqlite3Insert(Parse * pParse,	/* Parser context */
 	 * autoincrement tables.
 	 */
 	if (pParse->nested == 0 && pParse->pTriggerTab == 0) {
-		sqlite3AutoincrementEnd(pParse);
+		// sqlite3AutoincrementEnd(pParse);
 	}
 
 	/*
@@ -1734,6 +1735,16 @@ sqlite3GenerateConstraintChecks(Parse * pParse,		/* The parser context */
 		}
 
 		if (!HasRowid(pTab) && IsPrimaryKeyIndex(pIdx)) {
+			/* If PK is marked as INTEGER, use it as strict type,
+			 * not as affinity. Emit code for type checking */
+			if (pIdx->nKeyCol == 1) {
+				int pk = pIdx->aiColumn[0];
+				if (pTab->zColAff[pk] == 'D') {
+					sqlite3VdbeAddOp2(v, OP_MustBeInt,
+							  regNewData + 1 + pk,
+							  0);
+				}
+			}
 			sqlite3VdbeAddOp3(v, OP_MakeRecord, regNewData + 1,
 					  pTab->nCol, aRegIdx[ix]);
 		} else {

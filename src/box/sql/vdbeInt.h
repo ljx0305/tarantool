@@ -208,6 +208,7 @@ struct Mem {
 	union MemValue {
 		double r;	/* Real value used when MEM_Real is set in flags */
 		i64 i;		/* Integer value used when MEM_Int is set in flags */
+		bool b;         /* Boolean value used when MEM_Bool is set in flags */
 		int nZero;	/* Used when bit MEM_Zero is set in flags */
 		FuncDef *pDef;	/* Used only when flags==MEM_Agg */
 		RowSet *pRowSet;	/* Used only when flags==MEM_RowSet */
@@ -253,12 +254,13 @@ struct Mem {
 #define MEM_Int       0x0004	/* Value is an integer */
 #define MEM_Real      0x0008	/* Value is a real number */
 #define MEM_Blob      0x0010	/* Value is a BLOB */
-#define MEM_AffMask   0x001f	/* Mask of affinity bits */
-#define MEM_RowSet    0x0020	/* Value is a RowSet object */
-#define MEM_Frame     0x0040	/* Value is a VdbeFrame object */
-#define MEM_Undefined 0x0080	/* Value is undefined */
-#define MEM_Cleared   0x0100	/* NULL set by OP_Null, not from data */
-#define MEM_TypeMask  0x81ff	/* Mask of type bits */
+#define MEM_Bool      0x0020	/* Value is a bool */
+#define MEM_AffMask   0x003f	/* Mask of affinity bits */
+#define MEM_RowSet    0x0040	/* Value is a RowSet object */
+#define MEM_Frame     0x0080	/* Value is a VdbeFrame object */
+#define MEM_Undefined 0x0100	/* Value is undefined */
+#define MEM_Cleared   0x0200	/* NULL set by OP_Null, not from data */
+#define MEM_TypeMask  0x83ff	/* Mask of type bits */
 
 /* Whenever Mem contains a valid string or blob representation, one of
  * the following flags must be set to determine the memory management

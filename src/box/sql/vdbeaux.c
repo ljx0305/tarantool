@@ -4746,7 +4746,7 @@ sqlite3VdbeMsgpackRecordLen(Mem * pRec, u32 n)
 	assert(n != 0);
 	do {
 		assert(memIsValid(pRec));
-		if (pRec->flags & MEM_Null) {
+		if (pRec->flags & (MEM_Null | MEM_Bool)) {
 			nByte += 1;
 		} else if (pRec->flags & (MEM_Int | MEM_Real)) {
 			nByte += 9;
@@ -4783,6 +4783,9 @@ sqlite3VdbeMsgpackRecordPut(u8 * pBuf, Mem * pRec, u32 n)
 		} else if (pRec->flags & MEM_Str) {
 			zNewRecord =
 			    mp_encode_str(zNewRecord, pRec->z, pRec->n);
+		} else if (pRec->flags & MEM_Bool) {
+			zNewRecord =
+			    mp_encode_bool(zNewRecord, pRec->u.b);
 		} else {
 			/* Emit BIN header iff the BLOB doesn't store MsgPack content */
 			if ((pRec->flags & MEM_Subtype) == 0
