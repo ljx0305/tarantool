@@ -103,6 +103,10 @@ local function is_deeply_regex(got, expected)
         return table_match_regex_p(got, expected)
     end
 
+    if type(got) == "string" then
+        return got:lower() == expected:lower()
+    end
+
     if got == nil and expected == nil then return true end
 
     if type(got) ~= type(expected) then
@@ -282,7 +286,7 @@ end
 function test.drop_all_tables(self)
     local tables = test:find_spaces_by_sql_statement("CREATE TABLE")
     for _, table in ipairs(tables) do
-        test:execsql("DROP TABLE "..table..";")
+        test:execsql(string.format([[DROP TABLE "%s";]], table))
     end
     return tables
 end
@@ -290,7 +294,7 @@ end
 function test.drop_all_views(self)
     local views = test:find_spaces_by_sql_statement("CREATE VIEW")
     for _, view in ipairs(views) do
-        test:execsql("DROP VIEW "..view..";")
+        test:execsql(string.format([[DROP VIEW "%s";]], view))
     end
     return views
 end

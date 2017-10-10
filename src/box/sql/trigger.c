@@ -416,7 +416,7 @@ triggerStepAllocate(sqlite3 * db,	/* Database connection */
 	if (pTriggerStep) {
 		char *z = (char *)&pTriggerStep[1];
 		memcpy(z, pName->z, pName->n);
-		sqlite3Dequote(z);
+		sqlite3NormalizeName(z);
 		pTriggerStep->zTarget = z;
 		pTriggerStep->op = op;
 	}

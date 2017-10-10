@@ -705,38 +705,38 @@ void tarantoolSqlite3LoadSchema(InitData *init)
 	sql_schema_put(
 		init, TARANTOOL_SYS_SCHEMA_NAME,
 		BOX_SCHEMA_ID, 0,
-		"CREATE TABLE "TARANTOOL_SYS_SCHEMA_NAME
-		" (key TEXT PRIMARY KEY, value)"
+		"CREATE TABLE \""TARANTOOL_SYS_SCHEMA_NAME
+		"\" (\"key\" TEXT PRIMARY KEY, \"value\")"
 	);
 
 	sql_schema_put(
 		init, TARANTOOL_SYS_SPACE_NAME,
 		BOX_SPACE_ID, 0,
-		"CREATE TABLE "TARANTOOL_SYS_SPACE_NAME
-		" (id INT PRIMARY KEY, owner INT, name TEXT, "
-		"engine TEXT, field_count INT, opts, format)"
+		"CREATE TABLE \""TARANTOOL_SYS_SPACE_NAME
+		"\" (\"id\" INT PRIMARY KEY, \"owner\" INT, \"name\" TEXT, "
+		"\"engine\" TEXT, \"field_count\" INT, \"opts\", \"format\")"
 	);
 
 	sql_schema_put(
 		init, TARANTOOL_SYS_INDEX_NAME,
 		BOX_INDEX_ID, 0,
-		"CREATE TABLE "TARANTOOL_SYS_INDEX_NAME" (id INT, iid INT, "
-		"name TEXT, type TEXT, opts, parts, "
-		"PRIMARY KEY (id, iid))"
+		"CREATE TABLE \""TARANTOOL_SYS_INDEX_NAME"\" (\"id\" INT, \"iid\" INT, "
+		"\"name\" TEXT, \"type\" TEXT, \"opts\", \"parts\", "
+		"PRIMARY KEY (\"id\", \"iid\"))"
 	);
 
 	sql_schema_put(
 		init, TARANTOOL_SYS_TRIGGER_NAME,
 		BOX_TRIGGER_ID, 0,
-		"CREATE TABLE "TARANTOOL_SYS_TRIGGER_NAME" ("
-		"name TEXT, opts, PRIMARY KEY(name))"
+		"CREATE TABLE \""TARANTOOL_SYS_TRIGGER_NAME"\" ("
+		"\"name\" TEXT, \"opts\", PRIMARY KEY(\"name\"))"
 	);
 
 	sql_schema_put(
 		init, TARANTOOL_SYS_TRUNCATE_NAME,
 		BOX_TRUNCATE_ID, 0,
-		"CREATE TABLE "TARANTOOL_SYS_TRUNCATE_NAME
-		" (id INT PRIMARY KEY, count INT NOT NULL)"
+		"CREATE TABLE \""TARANTOOL_SYS_TRUNCATE_NAME
+		"\" (\"id\" INT PRIMARY KEY, \"count\" INT NOT NULL)"
 	);
 
 	/* Read _space */
