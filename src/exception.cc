@@ -127,6 +127,13 @@ void
 Exception::log() const
 {
 	_say(S_ERROR, file, line, errmsg, "%s", type->name);
+	if (depth_traceback > 0 && depth_traceback < DIAG_MAX_TRACEBACK) {
+		for (int i = 0; i < depth_traceback; i++) {
+			_say(S_ERROR, places[i].filename, places[i].line, errmsg, type->name);
+		}
+	} else {
+		say_error("empty traceback");
+	}
 }
 
 static const struct method_info systemerror_methods[] = {
