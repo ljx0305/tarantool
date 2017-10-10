@@ -7,6 +7,9 @@ ffi.cdef[[
     void
     say_set_log_level(int new_level);
 
+    void
+    say_set_log_format(const char *format_name);
+
     extern sayfunc_t _say;
     extern void say_logrotate(int);
 
@@ -21,8 +24,13 @@ ffi.cdef[[
         S_DEBUG
     };
 
+    enum say_format {
+        SF_PLAIN,
+        SF_JSON
+    };
     pid_t log_pid;
     extern int log_level;
+    extern int log_format;
 ]]
 
 local S_WARN = ffi.C.S_WARN
@@ -31,28 +39,39 @@ local S_VERBOSE = ffi.C.S_VERBOSE
 local S_DEBUG = ffi.C.S_DEBUG
 local S_ERROR = ffi.C.S_ERROR
 
+local json = require("json")
+
 local function say(level, fmt, ...)
     if ffi.C.log_level < level then
         -- don't waste cycles on debug.getinfo()
         return
     end
-    local debug = require('debug')
+    local format = "%s"
     if select('#', ...) ~= 0 then
         local stat
         stat, fmt = pcall(string.format, fmt, ...)
         if not stat then
             error(fmt, 3)
         end
+    elseif ffi.C.log_format == ffi.C.SF_JSON and type(fmt) == 'table' then
+        fmt = json.encode(fmt)
+
+        -- we need to pass parameter signaling that fmt
+        -- is already encoded json
+        format = "json"
     elseif type(fmt) ~= 'string' then
         fmt = tostring(fmt)
     end
+
+    local debug = require('debug')
     local frame = debug.getinfo(3, "Sl")
     local line, file = 0, 'eval'
     if type(frame) == 'table' then
         line = frame.currentline or 0
         file = frame.short_src or frame.src or 'eval'
     end
-    ffi.C._say(level, file, line, nil, "%s", fmt)
+
+    ffi.C._say(level, file, line, nil, format, fmt)
 end
 
 local function say_closure(lvl)
@@ -67,6 +86,10 @@ end
 
 local function log_level(level)
     return ffi.C.say_set_log_level(level)
+end
+
+local function log_format(format_name)
+    return ffi.C.say_set_log_format(format_name)
 end
 
 local function log_pid()
@@ -93,6 +116,7 @@ return setmetatable({
     rotate = log_rotate;
     pid = log_pid;
     level = log_level;
+    log_format = log_format;
 }, {
     __index = compat_v16;
 })

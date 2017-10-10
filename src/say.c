@@ -48,6 +48,7 @@
 
 pid_t log_pid = 0;
 int log_level = S_INFO;
+int log_format = SF_PLAIN;
 
 static const char logger_syntax_reminder[] =
 	"expecting a file name or a prefix, such as '|', 'pipe:', 'syslog:'";
@@ -98,6 +99,31 @@ level_to_char(int level)
 	}
 }
 
+static const char*
+level_to_string(int level)
+{
+	switch (level) {
+		case S_FATAL:
+			return "FATAL";
+		case S_SYSERROR:
+			return "SYSERROR";
+		case S_ERROR:
+			return "ERROR";
+		case S_CRIT:
+			return "CRIT";
+		case S_WARN:
+			return "WARN";
+		case S_INFO:
+			return "INFO";
+		case S_VERBOSE:
+			return "VERBOSE";
+		case S_DEBUG:
+			return "DEBUG";
+		default:
+			return "_";
+	}
+}
+
 static int
 level_to_syslog_priority(int level)
 {
@@ -127,6 +153,19 @@ void
 say_set_log_level(int new_level)
 {
 	log_level = new_level;
+}
+
+void
+say_set_log_format(const char *new_format)
+{
+	if (strncmp(new_format, "plain", sizeof("plain")) == 0) {
+		log_format = SF_PLAIN;
+	} else if (strncmp(new_format, "json", sizeof("json")) == 0){
+		log_format = SF_JSON;
+	} else {
+		fprintf(stderr, "logger: Wrong format %s\n", new_format);
+		exit(EXIT_FAILURE);
+	}
 }
 
 /**
@@ -337,12 +376,14 @@ say_syslog_init(const char *init_str)
  * Initialize logging subsystem to use in daemon mode.
  */
 void
-say_logger_init(const char *init_str, int level, int nonblock, int background)
+say_logger_init(const char *init_str, int level, int nonblock, const char *format, int background)
 {
 	log_level = level;
 	logger_nonblock = nonblock;
 	logger_background = background;
 	setvbuf(stderr, NULL, _IONBF, 0);
+
+	say_set_log_format(format);
 
 	if (init_str != NULL) {
 		enum say_logger_type type;
@@ -356,6 +397,10 @@ say_logger_init(const char *init_str, int level, int nonblock, int background)
 			say_pipe_init(init_str);
 			break;
 		case SAY_LOGGER_SYSLOG:
+			if (log_format != SF_PLAIN){
+				fprintf(stderr, "logger: Syslog does not support other than plain format\n");
+				exit(EXIT_FAILURE);
+			}
 			say_syslog_init(init_str);
 			break;
 		case SAY_LOGGER_FILE:
@@ -493,6 +538,70 @@ say_format_plain(char *buf, int len, int level, const char *filename, int line,
 }
 
 /**
+ * Format log message in json format:
+ * {"time": 1507026445.23232, "level": "WARN", "message": <message>, "pid": <pid>,
+ * "cord_name": <name>, "fiber_id": <id>, "fiber_name": <fiber_name>, filename": <filename>, "line": <fds>}
+ */
+static int
+say_format_json(char *buf, int len, int level, const char *filename, int line,
+		 const char *error, const char *format, va_list ap)
+{
+	int total = 0;
+
+	SNPRINT(total, snprintf, buf, len, "{\"time\": \"");
+
+	/* Don't use ev_now() since it requires a working event loop. */
+	ev_tstamp now = ev_time();
+	time_t now_seconds = (time_t) now;
+	struct tm tm;
+	localtime_r(&now_seconds, &tm);
+	int written = strftime(buf, len, "%FT%H:%M", &tm);
+	buf += written, len -= written, total += written;
+	SNPRINT(total, snprintf, buf, len, ":%06.3f",
+			now - now_seconds + tm.tm_sec);
+	written = strftime(buf, len, "%z", &tm);
+	buf += written, len -= written, total += written;
+	SNPRINT(total, snprintf, buf, len, "\", ");
+
+	SNPRINT(total, snprintf, buf, len, "\"level\": \"%s\", ",
+			level_to_string(level));
+
+	if (strncmp(format, "json", sizeof("json")) == 0) {
+		char *str = va_arg(ap, char *);
+		if (str == NULL) {
+			SNPRINT(total, snprintf, buf, len, "\"message\": \"%s\", ", format);
+		} else {
+			// get rid of brackets
+			str[strlen(str) - 1] = '\0';
+			SNPRINT(total, snprintf, buf, len, "%s, ", str + 1);
+		}
+	} else {
+		SNPRINT(total, snprintf, buf, len, "\"message\": \"");
+
+		SNPRINT(total, vsnprintf, buf, len, format, ap);
+		SNPRINT(total, snprintf, buf, len, "\", ");
+	}
+
+	if (error)
+		SNPRINT(total, snprintf, buf, len, "\"error_msg\": \"%s\"", error);
+
+	SNPRINT(total, snprintf, buf, len, "\"pid\": %i, ", getpid());
+
+	struct cord *cord = cord();
+	if (cord) {
+		SNPRINT(total, snprintf, buf, len, "\"cord_name\": \"%s\", ", cord->name);
+		if (fiber() && fiber()->fid != 1) {
+			SNPRINT(total, snprintf, buf, len, "\"fiber_id\": %i, ", fiber()->fid);
+			SNPRINT(total, snprintf, buf, len, "\"fiber_name\": \"%s\", ", fiber_name(fiber()));
+		}
+	}
+
+	SNPRINT(total, snprintf, buf, len, "\"file\": \"%s\", ", filename);
+	SNPRINT(total, snprintf, buf, len, "\"line\": %i}", line);
+	SNPRINT(total, snprintf, buf, len, "\n");
+	return total;
+}
+/**
  * Format the log message in syslog format.
  *
  * See RFC 5424 and RFC 3164. RFC 3164 is compatible with RFC 5424,
@@ -577,9 +686,19 @@ say_logger_file(int level, const char *filename, int line, const char *error,
 	int errsv = errno; /* Preserve the errno. */
 	va_list ap;
 	va_start(ap, format);
-
-	int total = say_format_plain(buf, sizeof(buf), level, filename,
-				     line, error, format, ap);
+	int total = 0;
+	switch (log_format) {
+		case SF_PLAIN:
+			total = say_format_plain(buf, sizeof(buf), level, filename,
+						line, error, format, ap);
+			break;
+		case SF_JSON:
+			total = say_format_json(buf, sizeof(buf), level, filename,
+									 line, error, format, ap);
+			break;
+		default:
+			fprintf(stderr, "logger: Wrong logger_format: %i\n", log_format);
+	}
 	assert(total >= 0);
 	(void) write(log_fd, buf, total);
 	/* Log fatal errors to STDERR */
