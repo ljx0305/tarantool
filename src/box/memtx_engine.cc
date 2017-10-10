@@ -159,7 +159,7 @@ MemtxEngine::recoverSnapshot(const struct vclock *vclock)
 
 	say_info("recovering from `%s'", filename);
 	struct xlog_cursor cursor;
-	xlog_cursor_open_xc(&cursor, filename);
+	xlog_cursor_open_xc(&cursor, filename, XLOG_CURSOR_TX_MODE_OFF);
 	INSTANCE_UUID = cursor.meta.instance_uuid;
 	auto reader_guard = make_scoped_guard([&]{
 		xlog_cursor_close(&cursor, false);
@@ -414,7 +414,8 @@ MemtxEngine::bootstrap()
 	xdir_create(&dir, "", SNAP, &uuid_nil);
 	struct xlog_cursor cursor;
 	if (xlog_cursor_openmem(&cursor, (const char *)bootstrap_bin,
-				sizeof(bootstrap_bin), "bootstrap") < 0) {
+				sizeof(bootstrap_bin), "bootstrap",
+				XLOG_CURSOR_TX_MODE_OFF) < 0) {
 		diag_raise();
 	};
 	auto guard = make_scoped_guard([&]{
@@ -752,7 +753,8 @@ memtx_initial_join_f(va_list ap)
 		xdir_destroy(&dir);
 	});
 	struct xlog_cursor cursor;
-	xdir_open_cursor_xc(&dir, checkpoint_lsn, &cursor);
+	xdir_open_cursor_xc(&dir, checkpoint_lsn, &cursor,
+			    XLOG_CURSOR_TX_MODE_OFF);
 	auto reader_guard = make_scoped_guard([&]{
 		xlog_cursor_close(&cursor, false);
 	});

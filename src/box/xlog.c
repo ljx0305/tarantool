@@ -334,7 +334,8 @@ xdir_index_file(struct xdir *dir, int64_t signature)
 	 * time it is created.
 	 */
 	struct xlog_cursor cursor;
-	if (xdir_open_cursor(dir, signature, &cursor) < 0)
+	if (xdir_open_cursor(dir, signature, &cursor,
+			     XLOG_CURSOR_TX_MODE_OFF) < 0)
 		return -1;
 	struct xlog_meta *meta = &cursor.meta;
 
@@ -372,7 +373,7 @@ xdir_index_file(struct xdir *dir, int64_t signature)
 
 int
 xdir_open_cursor(struct xdir *dir, int64_t signature,
-		 struct xlog_cursor *cursor)
+		 struct xlog_cursor *cursor, enum xlog_tx_mode tx_mode)
 {
 	const char *filename = xdir_format_filename(dir, signature, NONE);
 	int fd = open(filename, O_RDONLY);
@@ -380,7 +381,7 @@ xdir_open_cursor(struct xdir *dir, int64_t signature,
 		diag_set(SystemError, "failed to open '%s' file", filename);
 		return -1;
 	}
-	if (xlog_cursor_openfd(cursor, fd, filename) < 0) {
+	if (xlog_cursor_openfd(cursor, fd, filename, tx_mode) < 0) {
 		close(fd);
 		return -1;
 	}
@@ -1742,43 +1743,68 @@ xlog_cursor_next_row(struct xlog_cursor *cursor, struct xrow_header *xrow)
 }
 
 int
-xlog_cursor_next(struct xlog_cursor *cursor,
-		 struct xrow_header *xrow, bool force_recovery)
+xlog_cursor_next(struct xlog_cursor *cursor, struct xrow_header *xrow,
+		 bool force_recovery)
 {
-	while (true) {
-		int rc;
-		rc = xlog_cursor_next_row(cursor, xrow);
-		if (rc == 0)
-			break;
-		if (rc < 0) {
-			struct error *e = diag_last_error(diag_get());
-			if (!force_recovery ||
-			    e->type != &type_XlogError)
-				return -1;
-			say_error("can't decode row: %s", e->errmsg);
+	struct xlog_tx_cursor *tx_cursor = &cursor->tx_cursor;
+	int rc = 0;
+	switch(cursor->state) {
+		while (true) {
+	case XLOG_CURSOR_TX:
+			assert(cursor->state == XLOG_CURSOR_TX);
+			rc = xlog_tx_cursor_next_row(tx_cursor, xrow);
+			if (rc == 0)
+				return 0;
+			if (rc < 0) {
+				struct error *e = diag_last_error(diag_get());
+				if (!force_recovery ||
+				    e->type != &type_XlogError) {
+					xlog_tx_cursor_destroy(tx_cursor);
+					return -1;
+				}
+				say_error("can't decode row: %s", e->errmsg);
+			}
+			assert(cursor->state = XLOG_CURSOR_ACTIVE);
+			if (! cursor->skip_tx_boundaries) {
+				cursor->state = XLOG_CURSOR_TX_END;
+				return 0;
+	case XLOG_CURSOR_TX_END:
+				cursor->state = XLOG_CURSOR_ACTIVE;
+			}
+			xlog_tx_cursor_destroy(tx_cursor);
+	default:
+			while ((rc = xlog_cursor_next_tx(cursor)) < 0) {
+				struct error *e = diag_last_error(diag_get());
+				if (!force_recovery ||
+				    e->type != &type_XlogError)
+					return -1;
+				say_error("can't open tx: %s", e->errmsg);
+				if ((rc = xlog_cursor_find_tx_magic(cursor)) < 0)
+					return -1;
+				if (rc == 1)
+					return 1;
+			}
+			if (rc == 1)
+				return 1;
+			assert(cursor->state == XLOG_CURSOR_TX);
+			if (! cursor->skip_tx_boundaries) {
+				cursor->state = XLOG_CURSOR_TX_BEGIN;
+				return 0;
+	case XLOG_CURSOR_TX_BEGIN:
+				cursor->state = XLOG_CURSOR_TX;
+			}
 		}
-		while ((rc = xlog_cursor_next_tx(cursor)) < 0) {
-			struct error *e = diag_last_error(diag_get());
-			if (!force_recovery ||
-			    e->type != &type_XlogError)
-				return -1;
-			say_error("can't open tx: %s", e->errmsg);
-			if ((rc = xlog_cursor_find_tx_magic(cursor)) < 0)
-				return -1;
-			if (rc > 0)
-				break;
-		}
-		if (rc == 1)
-			return 1;
 	}
 	return 0;
 }
 
 int
-xlog_cursor_openfd(struct xlog_cursor *i, int fd, const char *name)
+xlog_cursor_openfd(struct xlog_cursor *i, int fd, const char *name,
+		   enum xlog_tx_mode tx_mode)
 {
 	memset(i, 0, sizeof(*i));
 	i->fd = fd;
+	i->skip_tx_boundaries = tx_mode == XLOG_CURSOR_TX_MODE_OFF;
 	ibuf_create(&i->rbuf, &cord()->slabc,
 		    XLOG_TX_AUTOCOMMIT_THRESHOLD << 1);
 
@@ -1814,14 +1840,15 @@ error:
 }
 
 int
-xlog_cursor_open(struct xlog_cursor *i, const char *name)
+xlog_cursor_open(struct xlog_cursor *i, const char *name,
+		 enum xlog_tx_mode tx_mode)
 {
 	int fd = open(name, O_RDONLY);
 	if (fd < 0) {
 		diag_set(SystemError, "failed to open '%s' file", name);
 		return -1;
 	}
-	int rc = xlog_cursor_openfd(i, fd, name);
+	int rc = xlog_cursor_openfd(i, fd, name, tx_mode);
 	if (rc < 0) {
 		close(fd);
 		return -1;
@@ -1831,10 +1858,11 @@ xlog_cursor_open(struct xlog_cursor *i, const char *name)
 
 int
 xlog_cursor_openmem(struct xlog_cursor *i, const char *data, size_t size,
-		    const char *name)
+		    const char *name, enum xlog_tx_mode tx_mode)
 {
 	memset(i, 0, sizeof(*i));
 	i->fd = -1;
+	i->skip_tx_boundaries = tx_mode == XLOG_CURSOR_TX_MODE_OFF;
 	ibuf_create(&i->rbuf, &cord()->slabc,
 		    XLOG_TX_AUTOCOMMIT_THRESHOLD << 1);
 

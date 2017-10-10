@@ -2004,7 +2004,8 @@ vy_recovery_new_f(va_list ap)
 		goto out;
 
 	struct xlog_cursor cursor;
-	if (xdir_open_cursor(&vy_log.dir, signature, &cursor) < 0)
+	if (xdir_open_cursor(&vy_log.dir, signature, &cursor,
+			     XLOG_CURSOR_TX_MODE_OFF) < 0)
 		goto fail_free;
 
 	int rc;

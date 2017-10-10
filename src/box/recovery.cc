@@ -303,7 +303,8 @@ recover_remaining_wals(struct recovery *r, struct xstream *stream,
 
 		recovery_close_log(r);
 
-		xdir_open_cursor_xc(&r->wal_dir, vclock_sum(clock), &r->cursor);
+		xdir_open_cursor_xc(&r->wal_dir, vclock_sum(clock), &r->cursor,
+				    XLOG_CURSOR_TX_MODE_OFF);
 
 		say_info("recover from `%s'", r->cursor.name);
 

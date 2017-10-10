@@ -541,12 +541,22 @@ enum xlog_cursor_state {
 	XLOG_CURSOR_CLOSED = 0,
 	/* The cursor is open but no tx is read */
 	XLOG_CURSOR_ACTIVE = 1,
-	/* The Cursor is open and a tx is read */
+	/* The cursor is open and reads a tx. */
 	XLOG_CURSOR_TX = 2,
+	/* The cursor is open and starts to read a tx. */
+	XLOG_CURSOR_TX_BEGIN = 3,
+	/* The cursor is open and ends with a current tx. */
+	XLOG_CURSOR_TX_END = 4,
 	/* The cursor is open but is at the end of file. */
-	XLOG_CURSOR_EOF = 3,
+	XLOG_CURSOR_EOF = 5,
 	/* The cursor was closed after reaching EOF. */
-	XLOG_CURSOR_EOF_CLOSED = 4,
+	XLOG_CURSOR_EOF_CLOSED = 6,
+};
+
+/** Mode to skip or do not skip xlog tx boundaries. */
+enum xlog_tx_mode {
+	XLOG_CURSOR_TX_MODE_ON = 0,
+	XLOG_CURSOR_TX_MODE_OFF = 1
 };
 
 /**
@@ -569,6 +579,8 @@ struct xlog_cursor
 	struct xlog_tx_cursor tx_cursor;
 	/** ZSTD context for decompression */
 	ZSTD_DStream *zdctx;
+	/** True to skip xlog transaction boundaries. */
+	bool skip_tx_boundaries;
 };
 
 /**
@@ -598,21 +610,25 @@ xlog_cursor_is_eof(const struct xlog_cursor *cursor)
  * @param cursor cursor
  * @param fd file descriptor
  * @param name associated file name
+ * @param tx_mode mode of xlog tx boundaries processing
  * @retval 0 succes
  * @retval -1 error, check diag
  */
 int
-xlog_cursor_openfd(struct xlog_cursor *cursor, int fd, const char *name);
+xlog_cursor_openfd(struct xlog_cursor *cursor, int fd, const char *name,
+		   enum xlog_tx_mode tx_mode);
 
 /**
  * Open cursor from file
  * @param cursor cursor
  * @param name file name
+ * @param tx_mode mode of xlog tx boundaries processing
  * @retval 0 succes
  * @retval -1 error, check diag
  */
 int
-xlog_cursor_open(struct xlog_cursor *cursor, const char *name);
+xlog_cursor_open(struct xlog_cursor *cursor, const char *name,
+		 enum xlog_tx_mode tx_mode);
 
 /**
  * Open cursor from memory
@@ -620,12 +636,13 @@ xlog_cursor_open(struct xlog_cursor *cursor, const char *name);
  * @param data pointer to memory block
  * @param size memory block size
  * @param name associated file name
+ * @param tx_mode mode of xlog tx boundaries processing
  * @retval 0 succes
  * @retval -1 error, check diag
  */
 int
 xlog_cursor_openmem(struct xlog_cursor *cursor, const char *data, size_t size,
-		    const char *name);
+		    const char *name, enum xlog_tx_mode tx_mode);
 
 /**
  * Reset cursor position
@@ -664,16 +681,23 @@ int
 xlog_cursor_next_row(struct xlog_cursor *cursor, struct xrow_header *xrow);
 
 /**
- * Fetch next row from cursor, ignores xlog tx boundary,
- * open a next one tx if current is done.
+ * Fetch next row from cursor. If a current xlog tx is finished,
+ * open a cursor to a next one. If tx_mode is set to ON, then
+ * check cursor->state after each next() to see transaction state.
+ * If state is TX_END or TX_BEGIN, then no rows returned. A caller
+ * must process only boundary, not row. Rows of a current xlog tx
+ * are not deleted until reached TX_END and next() is called.
+ * @param cursor Cursor to fetch from.
+ * @param[out] xrow Decoded xrow.
+ * @param force_recovery True to ignore some errors.
  *
  * @retval 0 for Ok
  * @retval 1 for EOF
  * @retval -1 for error
  */
 int
-xlog_cursor_next(struct xlog_cursor *cursor,
-		 struct xrow_header *xrow, bool force_recovery);
+xlog_cursor_next(struct xlog_cursor *cursor, struct xrow_header *xrow,
+		 bool force_recovery);
 
 /**
  * Move to the next xlog tx
@@ -717,12 +741,13 @@ xlog_cursor_tx_pos(struct xlog_cursor *cursor)
  * @param xdir xdir
  * @param signature xlog signature
  * @param cursor cursor
+ * @param tx_mode mode of xlog tx boundaries processing
  * @retval 0 succes
  * @retval -1 error, check diag
  */
 int
 xdir_open_cursor(struct xdir *dir, int64_t signature,
-		 struct xlog_cursor *cursor);
+		 struct xlog_cursor *cursor, enum xlog_tx_mode tx_mode);
 
 /** }}} */
 
@@ -750,9 +775,9 @@ xdir_check_xc(struct xdir *dir)
  */
 static inline int
 xdir_open_cursor_xc(struct xdir *dir, int64_t signature,
-		    struct xlog_cursor *cursor)
+		    struct xlog_cursor *cursor, enum xlog_tx_mode tx_mode)
 {
-	int rc = xdir_open_cursor(dir, signature, cursor);
+	int rc = xdir_open_cursor(dir, signature, cursor, tx_mode);
 	if (rc == -1)
 		diag_raise();
 	return rc;
@@ -762,9 +787,10 @@ xdir_open_cursor_xc(struct xdir *dir, int64_t signature,
  * @copydoc xlog_cursor_openfd
  */
 static inline int
-xlog_cursor_openfd_xc(struct xlog_cursor *cursor, int fd, const char *name)
+xlog_cursor_openfd_xc(struct xlog_cursor *cursor, int fd, const char *name,
+		      enum xlog_tx_mode tx_mode)
 {
-	int rc = xlog_cursor_openfd(cursor, fd, name);
+	int rc = xlog_cursor_openfd(cursor, fd, name, tx_mode);
 	if (rc == -1)
 		diag_raise();
 	return rc;
@@ -773,9 +799,10 @@ xlog_cursor_openfd_xc(struct xlog_cursor *cursor, int fd, const char *name)
  * @copydoc xlog_cursor_open
  */
 static inline int
-xlog_cursor_open_xc(struct xlog_cursor *cursor, const char *name)
+xlog_cursor_open_xc(struct xlog_cursor *cursor, const char *name,
+		    enum xlog_tx_mode tx_mode)
 {
-	int rc = xlog_cursor_open(cursor, name);
+	int rc = xlog_cursor_open(cursor, name, tx_mode);
 	if (rc == -1)
 		diag_raise();
 	return rc;
