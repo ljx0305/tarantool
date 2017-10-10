@@ -94,7 +94,7 @@ box.cfg{replication_timeout = 0.01}
 test_run:cmd("start server replica")
 test_run:cmd("switch replica")
 fiber = require'fiber'
-while box.info.replication[1].upstream.message ~= 'timed out' do fiber.sleep(0.0001) end
+while box.info.replication[1].upstream.message == nil or string.match(box.info.replication[1].upstream.message, "unexpected EOF") == nil do fiber.sleep(0.0001) end
 
 test_run:cmd("switch default")
 box.cfg{replication_timeout = 0.05}
@@ -103,7 +103,7 @@ test_run:cmd("switch replica")
 while box.info.replication[1].upstream.status ~= 'follow' do fiber.sleep(0.0001) end
 box.info.replication[1].upstream.status
 -- wait for ack timeout
-while box.info.replication[1].upstream.message ~= 'timed out' do fiber.sleep(0.0001) end
+while box.info.replication[1].upstream.message == nil or string.match(box.info.replication[1].upstream.message, "unexpected EOF") == nil do fiber.sleep(0.0001) end
 
 test_run:cmd("switch default")
 box.cfg{replication_timeout = 5}
