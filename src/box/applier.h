@@ -43,6 +43,7 @@
 #include "uri.h"
 #include "xstream.h"
 #include "vclock.h"
+#include "xrow_io.h"
 
 /** Network timeout */
 extern double applier_timeout;
@@ -113,6 +114,16 @@ struct applier {
 	struct xstream *join_stream;
 	/** xstream to process rows during final JOIN and SUBSCRIBE */
 	struct xstream subscribe_stream;
+	/** Currently appling batch. */
+	struct xrow_batch batch;
+	/**
+	 * Current position in the batch. Used to avoid creation
+	 * new not autocommit transactions, when the position is
+	 * last. It is neccessary, because transaction creation is
+	 * expensive:
+	 * mempool_alloc() + fiber_gc() + mempool_free().
+	 */
+	int pos_in_batch;
 };
 
 /**

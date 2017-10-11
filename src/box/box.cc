@@ -407,20 +407,72 @@ join_journal_create(struct join_journal *journal)
 }
 
 static inline void
-apply_row(struct xstream *stream, struct xrow_header *row)
+applier_begin_tx(struct xstream *stream)
 {
-	assert(row->bodycnt == 1); /* always 1 for read */
+	struct applier *applier =
+		container_of(stream, struct applier, subscribe_stream);
+	if (applier->pos_in_batch + 1 < applier->batch.count)
+		txn_begin(false);
+}
+
+static inline void
+applier_commit_tx(struct xstream *stream)
+{
 	(void) stream;
+	struct txn *txn = in_txn();
+	if (txn != NULL)
+		txn_commit(txn);
+}
+
+static inline void
+applier_rollback_tx(struct xstream *stream)
+{
+	(void) stream;
+	txn_rollback();
+}
+
+static inline void
+applier_apply_row(struct xstream *stream, struct xrow_header *row)
+{
+	struct applier *applier =
+		container_of(stream, struct applier, subscribe_stream);
+	assert(row->bodycnt == 1);
 	struct request request;
 	xrow_decode_dml_xc(row, &request, dml_request_key_map(row->type));
 	struct space *space = space_cache_find(request.space_id);
-	process_rw(&request, space, NULL);
+	struct txn *txn = in_txn();
+	if (space_is_system(space)) {
+		/* Make DDL rows in separate transactions. */
+		if (txn != NULL)
+			txn_commit(txn);
+		process_rw(&request, space, NULL);
+		/*
+		 * +2 because the current row is already
+		 * processed.
+		 */
+		if (applier->pos_in_batch + 2 < applier->batch.count)
+			txn_begin(false);
+	} else if (txn != NULL && space->engine != txn->engine &&
+		   txn->engine != NULL) {
+		/* Separate multiengine transactions. */
+		if (txn != NULL)
+			txn_commit(txn);
+		if (applier->pos_in_batch + 1 < applier->batch.count)
+			txn_begin(false);
+		process_rw(&request, space, NULL);
+	} else {
+		process_rw(&request, space, NULL);
+	}
 }
 
 static void
 apply_wal_row(struct xstream *stream, struct xrow_header *row)
 {
-	apply_row(stream, row);
+	assert(row->bodycnt == 1);
+	struct request request;
+	xrow_decode_dml_xc(row, &request, dml_request_key_map(row->type));
+	struct space *space = space_cache_find(request.space_id);
+	process_rw(&request, space, NULL);
 
 	struct wal_stream *xstream =
 		container_of(stream, struct wal_stream, base);
@@ -609,7 +661,8 @@ cfg_get_replication(int *p_count)
 				"too many replicas");
 	}
 	struct xstream subscribe_stream;
-	xstream_create(&subscribe_stream, apply_row, NULL, NULL, NULL);
+	xstream_create(&subscribe_stream, applier_apply_row, applier_begin_tx,
+		       applier_commit_tx, applier_rollback_tx);
 
 	for (int i = 0; i < count; i++) {
 		const char *source = cfg_getarr_elem("replication", i);

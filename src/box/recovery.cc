@@ -189,8 +189,21 @@ recover_xlog(struct recovery *r, struct xstream *stream,
 {
 	struct xrow_header row;
 	uint64_t row_count = 0;
-	while (xlog_cursor_next_xc(&r->cursor, &row,
-				   r->wal_dir.force_recovery) == 0) {
+	struct xlog_cursor *cursor = &r->cursor;
+	bool force_recovery = r->wal_dir.force_recovery;
+	while (xlog_cursor_next_xc(cursor, &row, force_recovery) == 0) {
+		if (cursor->state == XLOG_CURSOR_TX_BEGIN) {
+			xstream_begin_xc(stream);
+			continue;
+		} else if (cursor->state == XLOG_CURSOR_TX_END) {
+			if (xstream_commit(stream) != 0) {
+				say_error("can't apply tx: ");
+				diag_log();
+				if (! force_recovery)
+					diag_raise();
+			}
+			continue;
+		}
 		/*
 		 * Read the next row from xlog file.
 		 *
@@ -217,7 +230,7 @@ recover_xlog(struct recovery *r, struct xstream *stream,
 		 * in case of forced recovery, when we skip the
 		 * failed row anyway.
 		 */
-		vclock_follow(&r->vclock,  row.replica_id, row.lsn);
+		vclock_follow(&r->vclock, row.replica_id, row.lsn);
 		if (xstream_write(stream, &row) == 0) {
 			++row_count;
 			if (row_count % 100000 == 0)
@@ -304,7 +317,7 @@ recover_remaining_wals(struct recovery *r, struct xstream *stream,
 		recovery_close_log(r);
 
 		xdir_open_cursor_xc(&r->wal_dir, vclock_sum(clock), &r->cursor,
-				    XLOG_CURSOR_TX_MODE_OFF);
+				    XLOG_CURSOR_TX_MODE_ON);
 
 		say_info("recover from `%s'", r->cursor.name);
 
