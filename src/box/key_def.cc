@@ -244,55 +244,52 @@ key_def_encode_parts(char *data, const struct key_def *key_def)
 
 /**
  * 1.6.6-1.7.5
- * Decode parts array from tuple field and write'em to index_def structure.
+ * Decode one part and write'em to index_def structure.
  * Throws a nice error about invalid types, but does not check ranges of
  *  resulting values field_no and field_type
- * Parts expected to be a sequence of <part_count> arrays like this:
- *  [NUM, STR, ..][NUM, STR, ..]..,
+ * Part expected to be like this: [NUM, STR, ...]
  */
 static int
-key_def_decode_parts_166(struct key_def *key_def, const char **data)
+key_def_decode_part_166(struct key_def *key_def, uint32_t i, const char **data)
 {
-	for (uint32_t i = 0; i < key_def->part_count; i++) {
-		if (mp_typeof(**data) != MP_ARRAY) {
-			diag_set(ClientError, ER_WRONG_INDEX_PARTS,
-				 "expected an array");
-			return -1;
-		}
-		uint32_t item_count = mp_decode_array(data);
-		if (item_count < 1) {
-			diag_set(ClientError, ER_WRONG_INDEX_PARTS,
-				 "expected a non-empty array");
-			return -1;
-		}
-		if (item_count < 2) {
-			diag_set(ClientError, ER_WRONG_INDEX_PARTS,
-				 "a field type is missing");
-			return -1;
-		}
-		if (mp_typeof(**data) != MP_UINT) {
-			diag_set(ClientError, ER_WRONG_INDEX_PARTS,
-				 "field id must be an integer");
-			return -1;
-		}
-		uint32_t field_no = (uint32_t) mp_decode_uint(data);
-		if (mp_typeof(**data) != MP_STR) {
-			diag_set(ClientError, ER_WRONG_INDEX_PARTS,
-				 "field type must be a string");
-			return -1;
-		}
-		uint32_t len;
-		const char *str = mp_decode_str(data, &len);
-		for (uint32_t j = 2; j < item_count; j++)
-			mp_next(data);
-		enum field_type field_type = field_type_by_name(str, len);
-		if (field_type == field_type_MAX) {
-			diag_set(ClientError, ER_WRONG_INDEX_PARTS,
-				 "unknown field type");
-			return -1;
-		}
-		key_def_set_part(key_def, i, field_no, field_type, NULL);
+	if (mp_typeof(**data) != MP_ARRAY) {
+		diag_set(ClientError, ER_WRONG_INDEX_PARTS,
+			 "expected an array");
+		return -1;
 	}
+	uint32_t item_count = mp_decode_array(data);
+	if (item_count < 1) {
+		diag_set(ClientError, ER_WRONG_INDEX_PARTS,
+			 "expected a non-empty array");
+		return -1;
+	}
+	if (item_count < 2) {
+		diag_set(ClientError, ER_WRONG_INDEX_PARTS,
+			 "a field type is missing");
+		return -1;
+	}
+	if (mp_typeof(**data) != MP_UINT) {
+		diag_set(ClientError, ER_WRONG_INDEX_PARTS,
+			 "field id must be an integer");
+		return -1;
+	}
+	uint32_t field_no = (uint32_t) mp_decode_uint(data);
+	if (mp_typeof(**data) != MP_STR) {
+		diag_set(ClientError, ER_WRONG_INDEX_PARTS,
+			 "field type must be a string");
+		return -1;
+	}
+	uint32_t len;
+	const char *str = mp_decode_str(data, &len);
+	for (uint32_t j = 2; j < item_count; j++)
+		mp_next(data);
+	enum field_type field_type = field_type_by_name(str, len);
+	if (field_type == field_type_MAX) {
+		diag_set(ClientError, ER_WRONG_INDEX_PARTS,
+			 "unknown field type");
+		return -1;
+	}
+	key_def_set_part(key_def, i, field_no, field_type, NULL);
 	return 0;
 }
 
@@ -322,9 +319,12 @@ const struct opt_def part_def_reg[] = {
 int
 key_def_decode_parts(struct key_def *key_def, const char **data)
 {
-	if (mp_typeof(**data) == MP_ARRAY)
-		return key_def_decode_parts_166(key_def, data);
 	for (uint32_t i = 0; i < key_def->part_count; i++) {
+		if (mp_typeof(**data) == MP_ARRAY) {
+			if (key_def_decode_part_166(key_def, i, data) != 0)
+				return -1;
+			continue;
+		}
 		if (mp_typeof(**data) != MP_MAP) {
 			diag_set(ClientError, ER_WRONG_INDEX_OPTIONS, i + 1,
 				 "index part is expected to be a map");

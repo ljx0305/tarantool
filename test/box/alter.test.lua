@@ -66,11 +66,6 @@ _index:insert{_space.id, 0, 'primary', 'tree', 1, 1, 0, 'unsigned'}
 _index:replace{_space.id, 0, 'primary', 'tree', 1, 1, 0, 'unsigned'}
 _index:insert{_index.id, 0, 'primary', 'tree', 1, 2, 0, 'unsigned', 1, 'unsigned'}
 _index:replace{_index.id, 0, 'primary', 'tree', 1, 2, 0, 'unsigned', 1, 'unsigned'}
--- access_sysview.test changes output of _index:select{}.
--- let's change _index space in such a way that it will be
--- uniformn weather access_sysview.test is completed of not.
-box.space._space.index.owner:alter{parts = {2, 'unsigned'}}
-box.space._vspace.index.owner:alter{parts = {2, 'unsigned'}}
 _index:select{}
 -- modify indexes of a system space
 _index:delete{_index.id, 0}
@@ -422,4 +417,17 @@ s:create_index('test5', {parts = {{'test2', 'integer'}}}).parts
 s:create_index('test6', {parts = {1, 3}}).parts
 s:create_index('test7', {parts = {'test1', 4}}).parts
 s:create_index('test8', {parts = {{1, 'integer'}, {'test4', 'scalar'}}}).parts
+s:drop()
+
+-- save index parts in old format when possible
+-- https://github.com/tarantool/tarantool/issues/2802 follow up
+s = box.schema.space.create('test')
+i = s:create_index('test1', {parts = {1, 2}})
+box.space._index:get{s.id, i.id}[6]
+i:alter{parts = {1, {2, collation='unicode'}} }
+box.space._index:get{s.id, i.id}[6]
+i:alter{parts = {{1, type='integer'}, 2}}
+box.space._index:get{s.id, i.id}[6]
+i:alter{parts = {{1, collation='unicode', type='integer'}, {2, 'str'}}}
+box.space._index:get{s.id, i.id}[6]
 s:drop()

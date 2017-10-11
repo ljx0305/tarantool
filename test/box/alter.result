@@ -170,25 +170,16 @@ _index:replace{_index.id, 0, 'primary', 'tree', 1, 2, 0, 'unsigned', 1, 'unsigne
 ---
 - [288, 0, 'primary', 'tree', 1, 2, 0, 'unsigned', 1, 'unsigned']
 ...
--- access_sysview.test changes output of _index:select{}.
--- let's change _index space in such a way that it will be
--- uniformn weather access_sysview.test is completed of not.
-box.space._space.index.owner:alter{parts = {2, 'unsigned'}}
----
-...
-box.space._vspace.index.owner:alter{parts = {2, 'unsigned'}}
----
-...
 _index:select{}
 ---
 - - [272, 0, 'primary', 'tree', {'unique': true}, [[0, 'string']]]
   - [276, 0, 'primary', 'tree', {'unique': true}, [[0, 'unsigned']]]
   - [276, 1, 'name', 'tree', {'unique': true}, [[1, 'string']]]
   - [280, 0, 'primary', 'tree', 1, 1, 0, 'unsigned']
-  - [280, 1, 'owner', 'tree', {'unique': false}, [{'field': 1, 'type': 'unsigned'}]]
+  - [280, 1, 'owner', 'tree', {'unique': false}, [[1, 'unsigned']]]
   - [280, 2, 'name', 'tree', {'unique': true}, [[2, 'string']]]
   - [281, 0, 'primary', 'tree', {'unique': true}, [[0, 'unsigned']]]
-  - [281, 1, 'owner', 'tree', {'unique': false}, [{'field': 1, 'type': 'unsigned'}]]
+  - [281, 1, 'owner', 'tree', {'unique': false}, [[1, 'unsigned']]]
   - [281, 2, 'name', 'tree', {'unique': true}, [[2, 'string']]]
   - [284, 0, 'primary', 'tree', {'unique': true}, [[0, 'unsigned']]]
   - [284, 1, 'owner', 'tree', {'unique': false}, [[1, 'unsigned']]]
@@ -515,7 +506,7 @@ space.index.primary.parts[2].type == 'string'
 ...
 box.space._index:get({space.id, 0})[6]
 ---
-- [{'field': 0, 'type': 'number'}, {'field': 1, 'type': 'string'}]
+- [[0, 'number'], [1, 'string']]
 ...
 space:drop()
 ---
@@ -543,8 +534,7 @@ space.index.primary.parts[3].type == 'string'
 ...
 box.space._index:get({space.id, 0})[6]
 ---
-- [{'field': 0, 'type': 'unsigned'}, {'field': 1, 'type': 'integer'}, {'field': 2,
-    'type': 'string'}]
+- [[0, 'unsigned'], [1, 'integer'], [2, 'string']]
 ...
 space:drop()
 ---
@@ -565,7 +555,7 @@ space.index.primary.parts[1].type == 'unsigned'
 ...
 box.space._index:get({space.id, 0})[6]
 ---
-- [{'field': 0, 'type': 'unsigned'}]
+- [[0, 'unsigned']]
 ...
 space:drop()
 ---
@@ -1153,6 +1143,42 @@ s:create_index('test8', {parts = {{1, 'integer'}, {'test4', 'scalar'}}}).parts
     fieldno: 1
   - type: scalar
     fieldno: 4
+...
+s:drop()
+---
+...
+-- save index parts in old format when possible
+-- https://github.com/tarantool/tarantool/issues/2802 follow up
+s = box.schema.space.create('test')
+---
+...
+i = s:create_index('test1', {parts = {1, 2}})
+---
+...
+box.space._index:get{s.id, i.id}[6]
+---
+- [[0, 'scalar'], [1, 'scalar']]
+...
+i:alter{parts = {1, {2, collation='unicode'}} }
+---
+...
+box.space._index:get{s.id, i.id}[6]
+---
+- [[0, 'scalar'], {'field': 1, 'collation': 0, 'type': 'scalar'}]
+...
+i:alter{parts = {{1, type='integer'}, 2}}
+---
+...
+box.space._index:get{s.id, i.id}[6]
+---
+- [[0, 'integer'], [1, 'scalar']]
+...
+i:alter{parts = {{1, collation='unicode', type='integer'}, {2, 'str'}}}
+---
+...
+box.space._index:get{s.id, i.id}[6]
+---
+- [{'field': 0, 'collation': 0, 'type': 'integer'}, [1, 'string']]
 ...
 s:drop()
 ---

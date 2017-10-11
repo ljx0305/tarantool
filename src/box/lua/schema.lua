@@ -468,6 +468,14 @@ end
 
 box.schema.index = {}
 
+local field_type_aliases = {
+    num = 'unsigned'; -- Deprecated since 1.7.2
+    uint = 'unsigned';
+    str = 'string';
+    int = 'integer';
+    ['*'] = 'any';
+};
+
 local function update_index_parts_1_6_0(parts)
     local result = {}
     if #parts % 2 ~= 0 then
@@ -487,7 +495,14 @@ local function update_index_parts_1_6_0(parts)
             box.error(box.error.ILLEGAL_PARAMS,
                       "options.parts: expected field_no (number), type (string) pairs")
         end
-        table.insert(result, {field = parts[i] - 1, type = parts[i + 1]})
+        local field_type = parts[i + 1]:lower()
+        if field_type == 'num' then
+            log.warn("field type '%s' is deprecated since Tarantool 1.7, "..
+                     "please use '%s' instead", field_type,
+                     field_type_aliases[field_type])
+        end
+        field_type = field_type_aliases[field_type] or field_type
+        table.insert(result, {parts[i] - 1, field_type})
     end
     return result
 end
@@ -508,6 +523,7 @@ local function update_index_parts(space_id, parts)
     local result = {}
     for i=1,#parts do
         local part = {}
+        local simple_def = true -- part definition has only field and type
         if type(parts[i]) ~= "table" then
             part.field = parts[i]
         else
@@ -522,17 +538,24 @@ local function update_index_parts(space_id, parts)
                     local coll = box.space._collation.index.name:get{v}
                     if not coll then
                         box.error(box.error.ILLEGAL_PARAMS,
-                            "options.parts[" .. i .. "]: collation was not found by name '" .. v .. "'")
+                            "options.parts[" .. i ..
+                                    "]: collation was not found by name '" ..
+                                    v .. "'")
                     end
                     part[k] = coll[1]
+                    simple_def = false
                 else
+                    if k ~= 'field' and k~= 'type' then
+                        simple_def = false
+                    end
                     part[k] = v
                 end
             end
         end
         if type(part.field) ~= 'number' and type(part.field) ~= 'string' then
             box.error(box.error.ILLEGAL_PARAMS,
-                      "options.parts[" .. i .. "]: field (name or number) is expected")
+                      "options.parts[" .. i ..
+                              "]: field (name or number) is expected")
         elseif type(part.field) == 'string' then
             for k,v in pairs(box.space[space_id]:format()) do
                 if v.name == part.field then
@@ -542,11 +565,14 @@ local function update_index_parts(space_id, parts)
             end
             if type(part.field) == 'string' then
                 box.error(box.error.ILLEGAL_PARAMS,
-                          "options.parts[" .. i .. "]: field was not found by name '" .. part.field .. "'")
+                    "options.parts[" .. i ..
+                            "]: field was not found by name '" ..
+                            part.field .. "'")
             end
         elseif part.field == 0 then
             box.error(box.error.ILLEGAL_PARAMS,
-                      "options.parts[" .. i .. "]: field (number) must be one-based")
+                      "options.parts[" .. i ..
+                              "]: field (number) must be one-based")
         end
         if part.type == nil then
             local fmt = box.space[space_id]:format()[part.field]
@@ -558,11 +584,29 @@ local function update_index_parts(space_id, parts)
         elseif type(part.type) ~= 'string' then
             box.error(box.error.ILLEGAL_PARAMS,
                       "options.parts[" .. i .. "]: type (string) is expected")
+        else
+            local field_type = part.type:lower()
+            if field_type == 'num' then
+                log.warn("field type '%s' is deprecated since Tarantool 1.7, "..
+                        "please use '%s' instead", field_type,
+                    field_type_aliases[field_type])
+            end
+            part.type = field_type_aliases[field_type] or field_type
         end
         part.field = part.field - 1
+        if simple_def then
+            -- save in old format if possible
+            part = {part.field, part.type}
+        end
         table.insert(result, part)
     end
     return result
+end
+
+local function index_part_is_integer(part)
+    -- support different formats of a part
+    return part.type == 'integer' or part[2] == 'integer' or
+           part.type == 'unsigned' or part[2] == 'unsigned'
 end
 
 -- Historically, some properties of an index
@@ -669,21 +713,6 @@ box.schema.index.create = function(space_id, name, options)
             run_size_ratio = options.run_size_ratio,
             bloom_fpr = options.bloom_fpr,
     }
-    local field_type_aliases = {
-        num = 'unsigned'; -- Deprecated since 1.7.2
-        uint = 'unsigned';
-        str = 'string';
-        int = 'integer';
-        ['*'] = 'any';
-    };
-    for _, part in pairs(parts) do
-        local field_type = part.type:lower()
-        part.type = field_type_aliases[field_type] or field_type
-        if field_type == 'num' then
-            log.warn("field type '%s' is deprecated since Tarantool 1.7, "..
-                     "please use '%s' instead", field_type, part[2])
-        end
-    end
     local _space_sequence = box.space[box.schema.SPACE_SEQUENCE_ID]
     local sequence_is_generated = false
     local sequence = options.sequence or nil -- ignore sequence = false
@@ -692,8 +721,7 @@ box.schema.index.create = function(space_id, name, options)
             box.error(box.error.MODIFY_INDEX, name, box.space[space_id].name,
                       "sequence cannot be used with a secondary key")
         end
-        if #parts >= 1 and parts[1].type ~= 'integer' and
-                           parts[1].type ~= 'unsigned' then
+        if #parts >= 1 and not index_part_is_integer(parts[1]) then
             box.error(box.error.MODIFY_INDEX, name, box.space[space_id].name,
                       "sequence cannot be used with a non-integer key")
         end
@@ -828,8 +856,7 @@ box.schema.index.alter = function(space_id, index_id, options)
                       options.name, box.space[space_id].name,
                       "sequence cannot be used with a secondary key")
         end
-        if #parts >= 1 and parts[1].type ~= 'integer' and
-                           parts[1].type  ~= 'unsigned' then
+        if #parts >= 1 and not index_part_is_integer(parts[1]) then
             box.error(box.error.MODIFY_INDEX,
                       options.name, box.space[space_id].name,
                       "sequence cannot be used with a non-integer key")
