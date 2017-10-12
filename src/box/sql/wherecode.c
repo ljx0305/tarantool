@@ -1592,15 +1592,18 @@ sqlite3WhereCodeOneLoopStart(WhereInfo * pWInfo,	/* Complete information about t
 		if (!HasRowid(pIdx->pTable)) {
 			struct Index *pk = sqlite3PrimaryKeyIndex(pIdx->pTable);
 			assert(pk);
+			u16 force_int_mask = WO_IN;
+			int pk_col = pk->aiColumn[0];
 			if (pk->nKeyCol == 1
-			    && pIdx->pTable->aCol[0].affinity == 'D') {
-				for (int i = 0; i < pIdx->nColumn; i++) {
-					if (pIdx->aiColumn[i] == pk->aiColumn[0]
-						&& i < nEq) {
-						sqlite3VdbeAddOp2(v, OP_Cast, regBase + i, 'D');
+			    && pIdx->pTable->aCol[pk_col].affinity =='D')
+				for (int i = 0; i < pIdx->nColumn; i++)
+					if (pIdx->aiColumn[i] == pk_col
+					    && i < nEq) {
+						sqlite3VdbeAddOp1(v,
+								  OP_MustBeInt,
+								  regBase + i);
+						break;
 					}
-				}
-			}
 		}
 		codeApplyAffinity(pParse, regBase, nConstraint - bSeekPastNull,
 				  zStartAff);
