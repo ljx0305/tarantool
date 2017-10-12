@@ -411,9 +411,10 @@ apply_row(struct xstream *stream, struct xrow_header *row)
 {
 	assert(row->bodycnt == 1); /* always 1 for read */
 	(void) stream;
-	struct request *request = xrow_decode_dml_gc_xc(row);
-	struct space *space = space_cache_find(request->space_id);
-	process_rw(request, space, NULL);
+	struct request request;
+	xrow_decode_dml_xc(row, &request, dml_request_key_map(row->type));
+	struct space *space = space_cache_find(request.space_id);
+	process_rw(&request, space, NULL);
 }
 
 static void
@@ -449,10 +450,11 @@ static void
 apply_initial_join_row(struct xstream *stream, struct xrow_header *row)
 {
 	(void) stream;
-	struct request *request = xrow_decode_dml_gc_xc(row);
-	struct space *space = space_cache_find(request->space_id);
+	struct request request;
+	xrow_decode_dml_xc(row, &request, dml_request_key_map(row->type));
+	struct space *space = space_cache_find(request.space_id);
 	/* no access checks here - applier always works with admin privs */
-	space->vtab->apply_initial_join_row(space, request);
+	space->vtab->apply_initial_join_row(space, &request);
 }
 
 /* {{{ configuration bindings */
@@ -781,13 +783,10 @@ int
 boxk(int type, uint32_t space_id, const char *format, ...)
 {
 	va_list ap;
-	struct request *request;
-	request = region_alloc_object(&fiber()->gc, struct request);
-	if (request == NULL)
-		return -1;
-	memset(request, 0, sizeof(*request));
-	request->type = type;
-	request->space_id = space_id;
+	struct request request;
+	memset(&request, 0, sizeof(request));
+	request.type = type;
+	request.space_id = space_id;
 	va_start(ap, format);
 	size_t buf_size = mp_vformat(NULL, 0, format, ap);
 	char *buf = (char *)region_alloc(&fiber()->gc, buf_size);
@@ -803,28 +802,28 @@ boxk(int type, uint32_t space_id, const char *format, ...)
 	switch (type) {
 	case IPROTO_INSERT:
 	case IPROTO_REPLACE:
-		request->tuple = data;
-		request->tuple_end = data_end;
+		request.tuple = data;
+		request.tuple_end = data_end;
 		break;
 	case IPROTO_DELETE:
-		request->key = data;
-		request->key_end = data_end;
+		request.key = data;
+		request.key_end = data_end;
 		break;
 	case IPROTO_UPDATE:
-		request->key = data;
+		request.key = data;
 		mp_next(&data);
-		request->key_end = data;
-		request->tuple = data;
+		request.key_end = data;
+		request.tuple = data;
 		mp_next(&data);
-		request->tuple_end = data;
-		request->index_base = 0;
+		request.tuple_end = data;
+		request.index_base = 0;
 		break;
 	default:
 		unreachable();
 	}
 	try {
 		struct space *space = space_cache_find(space_id);
-		process_rw(request, space, NULL);
+		process_rw(&request, space, NULL);
 	} catch (Exception *e) {
 		return -1;
 	}
@@ -933,14 +932,11 @@ box_insert(uint32_t space_id, const char *tuple, const char *tuple_end,
 	   box_tuple_t **result)
 {
 	mp_tuple_assert(tuple, tuple_end);
-	struct request *request;
-	request = region_alloc_object_xc(&fiber()->gc, struct request);
-	memset(request, 0, sizeof(*request));
-	request->type = IPROTO_INSERT;
-	request->space_id = space_id;
-	request->tuple = tuple;
-	request->tuple_end = tuple_end;
-	return box_process1(request, result);
+	struct request request = {
+		NULL, IPROTO_INSERT, space_id, 0, 0, 0, 0, NULL, NULL,
+		tuple, tuple_end, NULL, NULL, 0
+	};
+	return box_process1(&request, result);
 }
 
 int
@@ -948,14 +944,11 @@ box_replace(uint32_t space_id, const char *tuple, const char *tuple_end,
 	    box_tuple_t **result)
 {
 	mp_tuple_assert(tuple, tuple_end);
-	struct request *request;
-	request = region_alloc_object_xc(&fiber()->gc, struct request);
-	memset(request, 0, sizeof(*request));
-	request->type = IPROTO_REPLACE;
-	request->space_id = space_id;
-	request->tuple = tuple;
-	request->tuple_end = tuple_end;
-	return box_process1(request, result);
+	struct request request = {
+		NULL, IPROTO_REPLACE, space_id, 0, 0, 0, 0, NULL, NULL,
+		tuple, tuple_end, NULL, NULL, 0
+	};
+	return box_process1(&request, result);
 }
 
 int
@@ -963,15 +956,11 @@ box_delete(uint32_t space_id, uint32_t index_id, const char *key,
 	   const char *key_end, box_tuple_t **result)
 {
 	mp_tuple_assert(key, key_end);
-	struct request *request;
-	request = region_alloc_object_xc(&fiber()->gc, struct request);
-	memset(request, 0, sizeof(*request));
-	request->type = IPROTO_DELETE;
-	request->space_id = space_id;
-	request->index_id = index_id;
-	request->key = key;
-	request->key_end = key_end;
-	return box_process1(request, result);
+	struct request request = {
+		NULL, IPROTO_DELETE, space_id, index_id, 0, 0, 0, key, key_end,
+		NULL, NULL, NULL, NULL, 0
+	};
+	return box_process1(&request, result);
 }
 
 int
@@ -981,19 +970,11 @@ box_update(uint32_t space_id, uint32_t index_id, const char *key,
 {
 	mp_tuple_assert(key, key_end);
 	mp_tuple_assert(ops, ops_end);
-	struct request *request;
-	request = region_alloc_object_xc(&fiber()->gc, struct request);
-	memset(request, 0, sizeof(*request));
-	request->type = IPROTO_UPDATE;
-	request->space_id = space_id;
-	request->index_id = index_id;
-	request->key = key;
-	request->key_end = key_end;
-	request->index_base = index_base;
-	/** Legacy: in case of update, ops are passed in in request tuple */
-	request->tuple = ops;
-	request->tuple_end = ops_end;
-	return box_process1(request, result);
+	struct request request = {
+		NULL, IPROTO_UPDATE, space_id, index_id, 0, 0, 0, key, key_end,
+		ops, ops_end, NULL, NULL, index_base
+	};
+	return box_process1(&request, result);
 }
 
 int
@@ -1003,18 +984,11 @@ box_upsert(uint32_t space_id, uint32_t index_id, const char *tuple,
 {
 	mp_tuple_assert(ops, ops_end);
 	mp_tuple_assert(tuple, tuple_end);
-	struct request *request;
-	request = region_alloc_object_xc(&fiber()->gc, struct request);
-	memset(request, 0, sizeof(*request));
-	request->type = IPROTO_UPSERT;
-	request->space_id = space_id;
-	request->index_id = index_id;
-	request->ops = ops;
-	request->ops_end = ops_end;
-	request->tuple = tuple;
-	request->tuple_end = tuple_end;
-	request->index_base = index_base;
-	return box_process1(request, result);
+	struct request request = {
+		NULL, IPROTO_UPSERT, space_id, index_id, 0, 0, 0, NULL, NULL,
+		tuple, tuple_end, ops, ops_end, index_base
+	};
+	return box_process1(&request, result);
 }
 
 /**

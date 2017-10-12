@@ -204,13 +204,14 @@ MemtxEngine::recoverSnapshotRow(struct xrow_header *row)
 			  (uint32_t) row->type);
 	}
 
-	struct request *request = xrow_decode_dml_gc_xc(row);
-	struct space *space = space_cache_find(request->space_id);
+	struct request request;
+	xrow_decode_dml_xc(row, &request, dml_request_key_map(row->type));
+	struct space *space = space_cache_find(request.space_id);
 	/* memtx snapshot must contain only memtx spaces */
 	if (space->engine != this)
 		tnt_raise(ClientError, ER_CROSS_ENGINE_TRANSACTION);
 	/* no access checks here - applier always works with admin privs */
-	space->vtab->apply_initial_join_row(space, request);
+	space->vtab->apply_initial_join_row(space, &request);
 	/*
 	 * Don't let gc pool grow too much. Yet to
 	 * it before reading the next row, to make
